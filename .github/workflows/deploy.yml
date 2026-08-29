@@ -69,9 +69,13 @@ jobs:
             sudo docker build -t imposter-tg-bot .
             sudo docker stop imposter-bot || true
             sudo docker rm imposter-bot || true
+            # Touch db.sqlite on the host to prevent Docker from creating a directory
+            touch "$PROJECT_PATH/db.sqlite"
+
             sudo docker run -d \
               --name imposter-bot \
               -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              -v "$PROJECT_PATH/db.sqlite:/app/db.sqlite" \
               -p 8080:7860 \
               --restart unless-stopped \
               imposter-tg-bot
