@@ -377,6 +377,7 @@ bot.command('impostergame', async (ctx) => {
 
   games.set(chatId, {
     lobbyMessageId: initialMsg.message_id,
+    creatorId: ctx.from.id,
     players: [],
     status: 'lobby',
     undercoverMode: false,
@@ -995,9 +996,9 @@ bot.action('cancel_game', async (ctx) => {
     return ctx.answerCbQuery("❌ No active game session.", { show_alert: true });
   }
 
-  const isPlayer = game.players.some(p => p.id === ctx.from.id) || game.players.length === 0;
-  if (!isPlayer) {
-    return ctx.answerCbQuery("❌ Only active players can end/cancel the game!", { show_alert: true });
+  const isCreator = ctx.from.id === game.creatorId;
+  if (!isCreator) {
+    return ctx.answerCbQuery("❌ Only the game creator can end/cancel the game!", { show_alert: true });
   }
 
   if (game.turnInterval) clearInterval(game.turnInterval);
