@@ -172,8 +172,8 @@ bot.start(async (ctx) => {
       return ctx.reply("❌ That game lobby no longer exists or has expired.");
     }
 
-    if (game.status !== 'lobby') {
-      return ctx.reply("⚠️ This game has already started!");
+    if (game.status !== 'lobby' && game.status !== 'ended') {
+      return ctx.reply("⚠️ This game is currently in progress!");
     }
 
     const userId = ctx.from.id;
@@ -198,8 +198,19 @@ bot.start(async (ctx) => {
 
     game.players.push({ id: userId, name, username });
     
+    // Initialize score
+    if (!game.scores) game.scores = {};
+    if (game.scores[userId] === undefined) {
+      game.scores[userId] = 0;
+    }
+    
     await ctx.reply(`✅ Successfully joined the game! Go back to the group.`);
-    await updateLobbyMessage(targetChatId);
+    
+    if (game.status === 'lobby') {
+      await updateLobbyMessage(targetChatId);
+    } else if (game.status === 'ended') {
+      await updateResultsMessageKeyboard(targetChatId);
+    }
   } else {
     if (!isGroup(ctx)) {
       ctx.reply(
@@ -237,6 +248,31 @@ async function updateLobbyMessage(chatId) {
       ])
     }
   );
+}
+
+// Update results message keyboard helper
+async function updateResultsMessageKeyboard(chatId) {
+  const game = games.get(chatId);
+  if (!game || game.status !== 'ended' || !game.lobbyMessageId) return;
+
+  const totalPlayers = game.players.length;
+  const requiredVotes = Math.ceil(totalPlayers / 2);
+  const currentVotes = game.nextRoundVotes.length;
+
+  try {
+    await bot.telegram.editMessageReplyMarkup(
+      chatId,
+      game.lobbyMessageId,
+      null,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('🙋‍♂️ Join Game', 'join_game_click')],
+        [Markup.button.callback(`🔄 Start New Match (${currentVotes}/${requiredVotes})`, 'start_new_match')],
+        [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
+      ]).reply_markup
+    );
+  } catch (err) {
+    // Ignore
+  }
 }
 
 // /impostergame command (Groups only)
@@ -300,8 +336,8 @@ bot.action('join_game_click', async (ctx) => {
     return ctx.answerCbQuery("❌ No active game session.", { show_alert: true });
   }
 
-  if (game.status !== 'lobby') {
-    return ctx.answerCbQuery("⚠️ The game has already started!", { show_alert: true });
+  if (game.status !== 'lobby' && game.status !== 'ended') {
+    return ctx.answerCbQuery("⚠️ The game is currently in progress!", { show_alert: true });
   }
 
   const userId = ctx.from.id;
@@ -344,9 +380,20 @@ bot.action('join_game_click', async (ctx) => {
   // If started, add them directly inside the group
   game.players.push({ id: userId, name, username });
   console.log(`[LOBBY] Player "${name}" (ID: ${userId}) joined game in chat ${chatId}`);
+
+  // Initialize score
+  if (!game.scores) game.scores = {};
+  if (game.scores[userId] === undefined) {
+    game.scores[userId] = 0;
+  }
+
   await ctx.answerCbQuery("🎉 You joined the game successfully!");
 
-  await updateLobbyMessage(chatId);
+  if (game.status === 'lobby') {
+    await updateLobbyMessage(chatId);
+  } else if (game.status === 'ended') {
+    await updateResultsMessageKeyboard(chatId);
+  }
 });
 
 // Toggle undercover mode
@@ -610,14 +657,49 @@ async function endVoting(chatId) {
   let resultMsg = `⚡️ 🗳️ *GAME RESULTS: ROUND ${game.round}* 🗳️ ⚡️\n`;
   resultMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
+  let imposterWon = false;
   if (votesCast === 0) {
     resultMsg += `🤷‍♂️ *No votes were cast!*\nNobody made a choice.\n\n😈 *IMPOSTER WINS!* 🏆`;
+    imposterWon = true;
   } else if (tie) {
     resultMsg += `⚖️ *It's a Tie!*\nThe group couldn't agree on a suspect.\n\n😈 *IMPOSTER WINS!* 🏆`;
+    imposterWon = true;
   } else if (votedOutPlayer.id === imposter.id) {
     resultMsg += `🎉 *Success!*\nYou successfully voted out the Imposter: *${escapeMarkdown(votedOutPlayer.name)}*!\n\n🏆 *INNOCENTS WIN!* 🎉`;
   } else {
     resultMsg += `💀 *Oops!*\nYou voted out an Innocent: *${escapeMarkdown(votedOutPlayer.name)}*.\n\n😈 *IMPOSTER WINS!* 🏆`;
+    imposterWon = true;
+  }
+
+  // Tally and apply points to scores
+  if (!game.scores) {
+    game.scores = {};
+  }
+  // Initialize missing scores
+  game.players.forEach(p => {
+    if (game.scores[p.id] === undefined) {
+      game.scores[p.id] = 0;
+    }
+  });
+
+  if (imposterWon) {
+    // Imposter wins: Imposter gets +20, Innocents who voted Imposter get +10
+    game.scores[imposter.id] = (game.scores[imposter.id] || 0) + 20;
+    game.players.forEach(p => {
+      if (p.id !== imposter.id) {
+        const playerVote = game.votes[p.id];
+        if (playerVote === imposter.id) {
+          game.scores[p.id] = (game.scores[p.id] || 0) + 10;
+        }
+      }
+    });
+  } else {
+    // Innocents win: Imposter gets 0, all Innocents get +15
+    game.players.forEach(p => {
+      if (p.id !== imposter.id) {
+        game.scores[p.id] = (game.scores[p.id] || 0) + 15;
+      }
+    });
   }
 
   // Show clues from all clue rounds in the final winner message
@@ -640,7 +722,16 @@ async function endVoting(chatId) {
     `🕵️‍♂️ *Imposter*: *${escapeMarkdown(imposter.name)}* (${escapeMarkdown(imposter.username) || 'No username'})\n\n` +
     `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
     `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
-    `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  // Scoreboard display
+  let scoreboardText = `🏆 *LOBBY SCOREBOARD* 🏆\n`;
+  const sortedPlayers = [...game.players].sort((a, b) => (game.scores[b.id] || 0) - (game.scores[a.id] || 0));
+  sortedPlayers.forEach(p => {
+    scoreboardText += `• *${escapeMarkdown(p.name)}*: \`${game.scores[p.id] || 0} pts\`\n`;
+  });
+
+  resultMsg += scoreboardText + `━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `🎮 *Start a new match?* (Majority vote required)`;
 
   game.status = 'ended';
@@ -657,6 +748,7 @@ async function endVoting(chatId) {
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
+        [Markup.button.callback('🙋‍♂️ Join Game', 'join_game_click')],
         [Markup.button.callback(`🔄 Start New Match (0/${requiredVotes})`, 'start_new_match')],
         [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
       ])
@@ -1064,6 +1156,7 @@ bot.action('start_new_match', async (ctx) => {
   } else {
     // Update the button with new count
     const votingButtons = [
+      [Markup.button.callback('🙋‍♂️ Join Game', 'join_game_click')],
       [Markup.button.callback(`🔄 Start New Match (${currentVotes}/${requiredVotes})`, 'start_new_match')],
       [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
     ];
