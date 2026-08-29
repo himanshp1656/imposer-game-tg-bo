@@ -114,11 +114,18 @@ function renderVotingText(game) {
 
   const totalVoted = Object.keys(game.votes).length;
 
+  let cluesList = '';
+  game.speakingOrderList.forEach((player) => {
+    const clue = game.clues[player.id] || 'No clue submitted ⏰';
+    cluesList += `• *${player.name}*: _"${clue}"_\n`;
+  });
+
   return `⚡️ 🗳️ *VOTING PHASE IS ACTIVE* 🗳️ ⚡️\n` +
          `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+         `💬 *Players & Clues Submitted:*\n${cluesList}\n` +
+         `─────────────────────\n` +
          `Click the button below to vote for the player you suspect is the Imposter!\n\n` +
          `🕰️ *Time Limit*: \`60s\`\n` +
-         `─────────────────────\n` +
          `👥 *Voted Players (${totalVoted}/${game.players.length}):*\n• _${votedPlayersNames}_`;
 }
 
