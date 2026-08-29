@@ -1,0 +1,76 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Copy files to EC2 via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "**"
+          target: "/home/ubuntu/imposer-game-tg-bo/"
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            
+            cd /home/ubuntu/imposer-game-tg-bo
+
+            # Force release stuck apt locks
+            echo "Checking and releasing apt locks..."
+            sudo killall apt apt-get || true
+            sudo rm -f /var/lib/apt/lists/lock
+            sudo rm -f /var/cache/apt/archives/lock
+            sudo rm -f /var/lib/dpkg/lock*
+            sudo dpkg --configure -a || true
+
+            # Safe disk cleanup (never deletes active/stopped containers or data volumes)
+            echo "Safe clean up of disk space on EC2..."
+            sudo apt-get clean
+            sudo rm -rf /var/cache/apt/archives/* || true
+            sudo journalctl --vacuum-size=10M || true
+            
+            # Clean only Docker build cache, never touch volumes or running systems
+            if command -v docker &> /dev/null; then
+              sudo docker builder prune -af || true
+              sudo docker image prune -f || true
+            fi
+
+            # Install Docker if missing
+            if ! command -v docker &> /dev/null; then
+              echo "Installing Docker..."
+              sudo apt-get update
+              sudo apt --fix-broken install -y
+              sudo apt-get install -y docker.io
+              sudo systemctl start docker
+              sudo systemctl enable docker
+              sudo usermod -aG docker ubuntu
+            fi
+
+            # Build and deploy Docker container
+            sudo docker build -t imposter-tg-bot .
+            sudo docker stop imposter-bot || true
+            sudo docker rm imposter-bot || true
+            sudo docker run -d \
+              --name imposter-bot \
+              -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              -p 8080:7860 \
+              --restart unless-stopped \
+              imposter-tg-bot
+
+            echo "Deployment finished successfully!"
