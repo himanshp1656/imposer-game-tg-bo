@@ -280,7 +280,8 @@ bot.command('impostergame', async (ctx) => {
     cluePromptMessageId: null,
     round: 1,
     history: [],
-    nextRoundVotes: []
+    nextRoundVotes: [],
+    phaseVotes: { anotherRound: [], goVoting: [] }
   });
 });
 
@@ -470,7 +471,7 @@ async function startNextTurn(chatId) {
 
       game.currentSpeakerIndex++;
       if (game.currentSpeakerIndex >= game.speakingOrderList.length) {
-        await startVotingPhase(chatId);
+        await askNextPhase(chatId);
       } else {
         await startNextTurn(chatId);
       }
@@ -508,7 +509,7 @@ bot.on('message', async (ctx, next) => {
 
     game.currentSpeakerIndex++;
     if (game.currentSpeakerIndex >= game.speakingOrderList.length) {
-      await startVotingPhase(chatId);
+      await askNextPhase(chatId);
     } else {
       await startNextTurn(chatId);
     }
@@ -614,14 +615,18 @@ async function endVoting(chatId) {
     resultMsg += `💀 *Oops!*\nYou voted out an Innocent: *${votedOutPlayer.name}*.\n\n😈 *IMPOSTER WINS!* 🏆`;
   }
 
-  // Show clues in the final winner message
-  let currentRoundClues = '';
-  game.speakingOrderList.forEach((player) => {
-    const clue = game.clues[player.id] || 'No clue submitted ⏰';
-    currentRoundClues += `• *${player.name}*: _"${clue}"_\n`;
+  // Show clues from all clue rounds in the final winner message
+  let allCluesText = '';
+  game.history.forEach((h) => {
+    allCluesText += `*Round ${h.round}*:\n`;
+    game.players.forEach((player) => {
+      const clue = h.clues[player.id] || 'No clue submitted ⏰';
+      allCluesText += `• ${player.name}: _"${clue}"_\n`;
+    });
+    allCluesText += `\n`;
   });
 
-  resultMsg += `\n\n💬 *Clues Submitted this Round:*\n${currentRoundClues}`;
+  resultMsg += `\n\n💬 *All Clues Submitted:*\n${allCluesText}`;
 
   // Fix the classic Imposter word bug here by checking game.undercoverMode
   const imposterWordText = game.undercoverMode ? (wordSetup.imposterWord || 'None') : 'None (Classic Mode)';
@@ -631,23 +636,14 @@ async function endVoting(chatId) {
     `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
     `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
     `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `🎮 *Play another round?* (Majority vote required)`;
-
-  // Save this round's clues to history
-  game.history.push({
-    round: game.round,
-    imposter: imposter.name,
-    word: wordSetup.word,
-    imposterWord: imposterWordText,
-    clues: { ...game.clues }
-  });
+    `🎮 *Start a new match?* (Majority vote required)`;
 
   game.status = 'ended';
   game.nextRoundVotes = [];
 
   const requiredVotes = Math.ceil(totalPlayers / 2);
 
-  console.log(`[GAME OVER] Chat ${chatId} round ${game.round} ended. Imposter: ${imposter.name}, Word: ${wordSetup.word}. Votes cast: ${votesCast}`);
+  console.log(`[GAME OVER] Chat ${chatId} ended. Imposter: ${imposter.name}, Word: ${wordSetup.word}. Votes cast: ${votesCast}`);
   
   await safeTelegramEditMessageText(
     chatId,
@@ -656,7 +652,7 @@ async function endVoting(chatId) {
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback(`🔄 Play Next Round (0/${requiredVotes})`, 'next_round_vote')],
+        [Markup.button.callback(`🔄 Start New Match (0/${requiredVotes})`, 'start_new_match')],
         [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
       ])
     }
@@ -788,14 +784,176 @@ bot.action('cancel_game', async (ctx) => {
   await safeTelegramEditMessageText(chatId, game.lobbyMessageId, revealMessage, { parse_mode: 'Markdown' });
 });
 
-// Handle next round vote action
-bot.action('next_round_vote', async (ctx) => {
+// Ask players what they want to do after a clue round is complete
+async function askNextPhase(chatId) {
+  const game = games.get(chatId);
+  if (!game) return;
+
+  game.status = 'transition';
+  game.phaseVotes = { anotherRound: [], goVoting: [] };
+
+  // Generate current round clues text to show them in the message
+  let currentRoundClues = '';
+  game.speakingOrderList.forEach(player => {
+    const clue = game.clues[player.id] || 'No clue submitted ⏰';
+    currentRoundClues += `• *${player.name}*: _"${clue}"_\n`;
+  });
+
+  const text = `✨ 🎮 *ROUND ${game.round} CLUES COMPLETE* 🎮 ✨\n` +
+         `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+         `💬 *Clues Submitted in Round ${game.round}:*\n${currentRoundClues}\n` +
+         `─────────────────────\n` +
+         `🤔 *What should we do next?*\n` +
+         `• If the majority votes for another clue round, players will submit another clue for the same word.\n` +
+         `• Otherwise, we will proceed to voting.\n\n` +
+         `📝 *Clue Round Votes*: 0\n` +
+         `🗳️ *Voting Phase Votes*: 0`;
+
+  // Update game board once to ask
+  await safeTelegramEditMessageText(
+    chatId,
+    game.lobbyMessageId,
+    text,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('📝 Another Clue Round (0)', 'phase_vote_clue'),
+          Markup.button.callback('🗳️ Go to Voting (0)', 'phase_vote_voting')
+        ],
+        [Markup.button.callback('❌ End Game', 'cancel_game')]
+      ])
+    }
+  );
+}
+
+// Handle votes for next phase (Clue round vs Voting phase)
+bot.action('phase_vote_clue', async (ctx) => {
+  await handlePhaseVote(ctx, 'anotherRound');
+});
+
+bot.action('phase_vote_voting', async (ctx) => {
+  await handlePhaseVote(ctx, 'goVoting');
+});
+
+async function handlePhaseVote(ctx, option) {
+  const chatId = ctx.chat.id;
+  const voterId = ctx.from.id;
+  const game = games.get(chatId);
+
+  if (!game || game.status !== 'transition') {
+    return ctx.answerCbQuery("❌ No active transition vote running.", { show_alert: true });
+  }
+
+  const isPlayer = game.players.some(p => p.id === voterId);
+  if (!isPlayer) {
+    return ctx.answerCbQuery("❌ You are not a player in this game!", { show_alert: true });
+  }
+
+  // Remove voter from other options if they change their vote
+  const otherOption = option === 'anotherRound' ? 'goVoting' : 'anotherRound';
+  game.phaseVotes[otherOption] = game.phaseVotes[otherOption].filter(id => id !== voterId);
+
+  // Add voter to selected option if not already there
+  if (!game.phaseVotes[option].includes(voterId)) {
+    game.phaseVotes[option].push(voterId);
+  }
+
+  await ctx.answerCbQuery("✅ Vote registered!");
+
+  const totalPlayers = game.players.length;
+  const majority = Math.ceil(totalPlayers / 2);
+
+  const anotherRoundCount = game.phaseVotes.anotherRound.length;
+  const goVotingCount = game.phaseVotes.goVoting.length;
+
+  // Check if decision is reached
+  if (anotherRoundCount >= majority) {
+    // Save this round's clues to history
+    game.history.push({
+      round: game.round,
+      clues: { ...game.clues }
+    });
+
+    game.round++;
+    game.status = 'playing';
+    game.clues = {};
+    game.speakingOrderList = [...game.players].sort(() => Math.random() - 0.5);
+    game.currentSpeakerIndex = 0;
+
+    console.log(`[ROUND START] Chat ${chatId} started Round ${game.round} of clues.`);
+
+    // Send a message stating another round is starting
+    await ctx.reply(`📝 Majority voted for Another Clue Round! Starting Clue Round ${game.round}...`);
+    
+    // We recreate a fresh board message
+    game.turnTimeLeft = 60;
+    const boardMsg = await ctx.reply(
+      renderBoardText(game),
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🔑 Reveal My Word', 'reveal_word')],
+          [Markup.button.callback('❌ End Game', 'cancel_game')]
+        ])
+      }
+    );
+    game.lobbyMessageId = boardMsg.message_id;
+    await safePinMessage(chatId, boardMsg.message_id);
+
+    await startNextTurn(chatId);
+  } else if (goVotingCount >= majority || (anotherRoundCount + goVotingCount >= totalPlayers)) {
+    // Save final clues to history before starting voting phase
+    game.history.push({
+      round: game.round,
+      clues: { ...game.clues }
+    });
+
+    await ctx.reply("🗳️ Proceeding to the Voting Phase!");
+    await startVotingPhase(chatId);
+  } else {
+    // Update the inline buttons with counts
+    let currentRoundClues = '';
+    game.speakingOrderList.forEach(player => {
+      const clue = game.clues[player.id] || 'No clue submitted ⏰';
+      currentRoundClues += `• *${player.name}*: _"${clue}"_\n`;
+    });
+
+    const text = `✨ 🎮 *ROUND ${game.round} CLUES COMPLETE* 🎮 ✨\n` +
+           `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+           `💬 *Clues Submitted in Round ${game.round}:*\n${currentRoundClues}\n` +
+           `─────────────────────\n` +
+           `🤔 *What should we do next?*\n` +
+           `• If the majority votes for another clue round, players will submit another clue for the same word.\n` +
+           `• Otherwise, we will proceed to voting.\n\n` +
+           `📝 *Clue Round Votes*: ${anotherRoundCount}\n` +
+           `🗳️ *Voting Phase Votes*: ${goVotingCount}`;
+
+    try {
+      await ctx.editMessageText(text, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(`📝 Another Clue Round (${anotherRoundCount})`, 'phase_vote_clue'),
+            Markup.button.callback(`🗳️ Go to Voting (${goVotingCount})`, 'phase_vote_voting')
+          ],
+          [Markup.button.callback('❌ End Game', 'cancel_game')]
+        ])
+      });
+    } catch (err) {
+      // Ignore
+    }
+  }
+}
+
+// Handle start new match action (resets game round to 1 and history, starts new match with same players)
+bot.action('start_new_match', async (ctx) => {
   const chatId = ctx.chat.id;
   const voterId = ctx.from.id;
   const game = games.get(chatId);
 
   if (!game || game.status !== 'ended') {
-    return ctx.answerCbQuery("❌ No game is currently waiting for a next round.", { show_alert: true });
+    return ctx.answerCbQuery("❌ No game is currently waiting to start a new match.", { show_alert: true });
   }
 
   const isPlayer = game.players.some(p => p.id === voterId);
@@ -804,7 +962,7 @@ bot.action('next_round_vote', async (ctx) => {
   }
 
   if (game.nextRoundVotes.includes(voterId)) {
-    return ctx.answerCbQuery("ℹ️ You already voted for another round!");
+    return ctx.answerCbQuery("ℹ️ You already voted to start a new match!");
   }
 
   game.nextRoundVotes.push(voterId);
@@ -815,12 +973,14 @@ bot.action('next_round_vote', async (ctx) => {
   await ctx.answerCbQuery("✅ Vote recorded!");
 
   if (currentVotes >= requiredVotes) {
-    // Start Next Round!
-    game.round++;
+    // Reset to Round 1 and clear history
+    game.round = 1;
+    game.history = [];
     game.status = 'playing';
     game.clues = {};
     game.votes = {};
     game.nextRoundVotes = [];
+    game.phaseVotes = { anotherRound: [], goVoting: [] };
 
     const wordSetup = getRandomWord();
     const imposterIndex = Math.floor(Math.random() * totalPlayers);
@@ -835,7 +995,7 @@ bot.action('next_round_vote', async (ctx) => {
     const oldBoardId = game.lobbyMessageId;
     await safeDeleteMessage(chatId, oldBoardId);
 
-    console.log(`[GAME START] Chat ${chatId} Round ${game.round} started. Imposter: "${imposter.name}" (ID: ${imposter.id}). Word: "${wordSetup.word}".`);
+    console.log(`[NEW MATCH START] Chat ${chatId} started a new match. Imposter: "${imposter.name}" (ID: ${imposter.id}). Word: "${wordSetup.word}".`);
 
     game.turnTimeLeft = 60;
     const boardMsg = await ctx.reply(
@@ -856,7 +1016,7 @@ bot.action('next_round_vote', async (ctx) => {
   } else {
     // Update the button with new count
     const votingButtons = [
-      [Markup.button.callback(`🔄 Play Next Round (${currentVotes}/${requiredVotes})`, 'next_round_vote')],
+      [Markup.button.callback(`🔄 Start New Match (${currentVotes}/${requiredVotes})`, 'start_new_match')],
       [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
     ];
 
