@@ -1,4 +1,4 @@
-name: Deploy to EC2
+name: Deploy to VPS
 
 on:
   push:
@@ -11,41 +11,45 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Copy files to EC2 via SCP
+      - name: Copy files via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
+          port: ${{ secrets.VPS_PORT || 22 }}
+          username: ${{ secrets.VPS_USERNAME || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
           source: "**"
-          target: "/home/ubuntu/imposer-game-tg-bo/"
+          target: ${{ secrets.VPS_PROJECT_PATH || '/home/ubuntu/imposer-game-tg-bo/' }}
 
-      - name: Deploy to EC2 via SSH
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
+          port: ${{ secrets.VPS_PORT || 22 }}
+          username: ${{ secrets.VPS_USERNAME || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
           script: |
             set -e
-            
-            cd /home/ubuntu/imposer-game-tg-bo
+            PROJECT_PATH="${{ secrets.VPS_PROJECT_PATH || '/home/ubuntu/imposer-game-tg-bo/' }}"
+            cd "$PROJECT_PATH"
 
-            # Force release stuck apt locks
+            # Force release stuck apt locks (only if apt is active)
             echo "Checking and releasing apt locks..."
-            sudo killall apt apt-get || true
+            sudo killall apt apt-get 2>/dev/null || true
             sudo rm -f /var/lib/apt/lists/lock
             sudo rm -f /var/cache/apt/archives/lock
             sudo rm -f /var/lib/dpkg/lock*
-            sudo dpkg --configure -a || true
+            sudo dpkg --configure -a 2>/dev/null || true
 
-            # Safe disk cleanup (never deletes active/stopped containers or data volumes)
-            echo "Safe clean up of disk space on EC2..."
-            sudo apt-get clean
+            # Safe disk cleanup
+            echo "Safe clean up of disk space..."
+            sudo apt-get clean || true
             sudo rm -rf /var/cache/apt/archives/* || true
-            sudo journalctl --vacuum-size=10M || true
+            sudo journalctl --vacuum-size=10M 2>/dev/null || true
             
-            # Clean only Docker build cache, never touch volumes or running systems
+            # Clean only Docker build cache
             if command -v docker &> /dev/null; then
               sudo docker builder prune -af || true
               sudo docker image prune -f || true
@@ -55,11 +59,10 @@ jobs:
             if ! command -v docker &> /dev/null; then
               echo "Installing Docker..."
               sudo apt-get update
-              sudo apt --fix-broken install -y
               sudo apt-get install -y docker.io
               sudo systemctl start docker
               sudo systemctl enable docker
-              sudo usermod -aG docker ubuntu
+              sudo usermod -aG docker ${{ secrets.VPS_USERNAME || 'ubuntu' }}
             fi
 
             # Build and deploy Docker container
