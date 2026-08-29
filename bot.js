@@ -444,7 +444,6 @@ bot.on('message', async (ctx, next) => {
 
     game.clues[ctx.from.id] = clueText;
 
-    await safeDeleteMessage(chatId, game.cluePromptMessageId);
     game.cluePromptMessageId = null;
 
     if (game.turnInterval) {
