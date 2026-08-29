@@ -770,6 +770,7 @@ bot.action('cancel_game', async (ctx) => {
 
   if (game.turnInterval) clearInterval(game.turnInterval);
   if (game.votingInterval) clearInterval(game.votingInterval);
+  if (game.transitionTimeout) clearTimeout(game.transitionTimeout);
 
   let revealMessage = "🛑 *Game Cancelled / Ended.*\n";
   revealMessage += "━━━━━━━━━━━━━━━━━━━━━\n";
@@ -789,30 +790,57 @@ bot.action('cancel_game', async (ctx) => {
   await safeTelegramEditMessageText(chatId, game.lobbyMessageId, revealMessage, { parse_mode: 'Markdown' });
 });
 
+// Render transition voting board text showing all clues from all rounds
+function renderTransitionText(game) {
+  let cluesText = '';
+  // Append historical rounds
+  game.history.forEach(h => {
+    cluesText += `*Round ${h.round}*:\n`;
+    game.players.forEach(player => {
+      const clue = h.clues[player.id] || 'No clue submitted ⏰';
+      cluesText += `• ${escapeMarkdown(player.name)}: _"${escapeMarkdown(clue)}"_\n`;
+    });
+    cluesText += `\n`;
+  });
+  
+  // Append current round clues
+  cluesText += `*Round ${game.round}* (Latest):\n`;
+  game.speakingOrderList.forEach(player => {
+    const clue = game.clues[player.id] || 'No clue submitted ⏰';
+    cluesText += `• ${escapeMarkdown(player.name)}: _"${escapeMarkdown(clue)}"_\n`;
+  });
+
+  const anotherRoundCount = game.phaseVotes ? game.phaseVotes.anotherRound.length : 0;
+  const goVotingCount = game.phaseVotes ? game.phaseVotes.goVoting.length : 0;
+  const totalPlayers = game.players.length;
+  const majority = Math.ceil(totalPlayers / 2);
+
+  return `✨ 🎮 *ROUND ${game.round} CLUES COMPLETE* 🎮 ✨\n` +
+         `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+         `💬 *All Clues Submitted:*\n${cluesText}\n` +
+         `─────────────────────\n` +
+         `🤔 *What should we do next?*\n` +
+         `• If the majority votes for another clue round, players will submit another clue for the same word.\n` +
+         `• Otherwise, we will proceed to voting.\n\n` +
+         `⏳ *Automatic Transition*: If the majority (${majority}/${totalPlayers}) does not vote, the game will automatically proceed to the voting phase in 60s.\n\n` +
+         `📝 *Clue Round Votes*: ${anotherRoundCount}\n` +
+         `🗳️ *Voting Phase Votes*: ${goVotingCount}`;
+}
+
 // Ask players what they want to do after a clue round is complete
 async function askNextPhase(chatId) {
   const game = games.get(chatId);
   if (!game) return;
 
+  if (game.transitionTimeout) {
+    clearTimeout(game.transitionTimeout);
+    game.transitionTimeout = null;
+  }
+
   game.status = 'transition';
   game.phaseVotes = { anotherRound: [], goVoting: [] };
 
-  // Generate current round clues text to show them in the message
-  let currentRoundClues = '';
-  game.speakingOrderList.forEach(player => {
-    const clue = game.clues[player.id] || 'No clue submitted ⏰';
-    currentRoundClues += `• *${player.name}*: _"${clue}"_\n`;
-  });
-
-  const text = `✨ 🎮 *ROUND ${game.round} CLUES COMPLETE* 🎮 ✨\n` +
-         `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-         `💬 *Clues Submitted in Round ${game.round}:*\n${currentRoundClues}\n` +
-         `─────────────────────\n` +
-         `🤔 *What should we do next?*\n` +
-         `• If the majority votes for another clue round, players will submit another clue for the same word.\n` +
-         `• Otherwise, we will proceed to voting.\n\n` +
-         `📝 *Clue Round Votes*: 0\n` +
-         `🗳️ *Voting Phase Votes*: 0`;
+  const text = renderTransitionText(game);
 
   // Delete the old clue board message to keep chat clean
   const oldBoardId = game.lobbyMessageId;
@@ -834,6 +862,21 @@ async function askNextPhase(chatId) {
     }
   );
   game.lobbyMessageId = msg.message_id;
+
+  // Set a 60-second transition timeout
+  game.transitionTimeout = setTimeout(async () => {
+    const activeGame = games.get(chatId);
+    if (activeGame && activeGame.status === 'transition') {
+      game.transitionTimeout = null;
+      // Save clues to history
+      activeGame.history.push({
+        round: activeGame.round,
+        clues: { ...activeGame.clues }
+      });
+      await bot.telegram.sendMessage(chatId, "⏰ Time's up! Proceeding to the Voting Phase automatically.");
+      await startVotingPhase(chatId);
+    }
+  }, 60000);
 }
 
 // Handle votes for next phase (Clue round vs Voting phase)
@@ -878,6 +921,11 @@ async function handlePhaseVote(ctx, option) {
 
   // Check if decision is reached
   if (anotherRoundCount >= majority) {
+    if (game.transitionTimeout) {
+      clearTimeout(game.transitionTimeout);
+      game.transitionTimeout = null;
+    }
+
     // Save this round's clues to history
     game.history.push({
       round: game.round,
@@ -912,6 +960,11 @@ async function handlePhaseVote(ctx, option) {
 
     await startNextTurn(chatId);
   } else if (goVotingCount >= majority || (anotherRoundCount + goVotingCount >= totalPlayers)) {
+    if (game.transitionTimeout) {
+      clearTimeout(game.transitionTimeout);
+      game.transitionTimeout = null;
+    }
+
     // Save final clues to history before starting voting phase
     game.history.push({
       round: game.round,
@@ -921,22 +974,8 @@ async function handlePhaseVote(ctx, option) {
     await ctx.reply("🗳️ Proceeding to the Voting Phase!");
     await startVotingPhase(chatId);
   } else {
-    // Update the inline buttons with counts
-    let currentRoundClues = '';
-    game.speakingOrderList.forEach(player => {
-      const clue = game.clues[player.id] || 'No clue submitted ⏰';
-      currentRoundClues += `• *${player.name}*: _"${clue}"_\n`;
-    });
-
-    const text = `✨ 🎮 *ROUND ${game.round} CLUES COMPLETE* 🎮 ✨\n` +
-           `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-           `💬 *Clues Submitted in Round ${game.round}:*\n${currentRoundClues}\n` +
-           `─────────────────────\n` +
-           `🤔 *What should we do next?*\n` +
-           `• If the majority votes for another clue round, players will submit another clue for the same word.\n` +
-           `• Otherwise, we will proceed to voting.\n\n` +
-           `📝 *Clue Round Votes*: ${anotherRoundCount}\n` +
-           `🗳️ *Voting Phase Votes*: ${goVotingCount}`;
+    // Update the inline buttons with counts and show all clue history
+    const text = renderTransitionText(game);
 
     try {
       await ctx.editMessageText(text, {
@@ -1048,6 +1087,7 @@ process.once('SIGINT', () => {
   games.forEach(g => {
     if (g.turnInterval) clearInterval(g.turnInterval);
     if (g.votingInterval) clearInterval(g.votingInterval);
+    if (g.transitionTimeout) clearTimeout(g.transitionTimeout);
   });
   bot.stop('SIGINT');
 });
@@ -1055,6 +1095,7 @@ process.once('SIGTERM', () => {
   games.forEach(g => {
     if (g.turnInterval) clearInterval(g.turnInterval);
     if (g.votingInterval) clearInterval(g.votingInterval);
+    if (g.transitionTimeout) clearTimeout(g.transitionTimeout);
   });
   bot.stop('SIGTERM');
 });
