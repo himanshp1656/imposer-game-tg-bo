@@ -706,9 +706,8 @@ bot.on('message', async (ctx, next) => {
   const currentSpeaker = game.speakingOrderList[game.currentSpeakerIndex];
 
   const isReply = replyTo && game.cluePromptMessageId && replyTo.message_id === game.cluePromptMessageId;
-  const isDirect = ctx.from.id === currentSpeaker.id && ctx.message.text && !ctx.message.text.startsWith('/');
 
-  if (isReply || isDirect) {
+  if (isReply) {
     if (ctx.from.id !== currentSpeaker.id) {
       return;
     }
