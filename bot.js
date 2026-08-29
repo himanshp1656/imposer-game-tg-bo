@@ -809,10 +809,13 @@ async function askNextPhase(chatId) {
          `📝 *Clue Round Votes*: 0\n` +
          `🗳️ *Voting Phase Votes*: 0`;
 
-  // Update game board once to ask
-  await safeTelegramEditMessageText(
+  // Delete the old clue board message to keep chat clean
+  const oldBoardId = game.lobbyMessageId;
+  await safeDeleteMessage(chatId, oldBoardId);
+
+  // Send NEW message for transition voting
+  const msg = await bot.telegram.sendMessage(
     chatId,
-    game.lobbyMessageId,
     text,
     {
       parse_mode: 'Markdown',
@@ -825,6 +828,7 @@ async function askNextPhase(chatId) {
       ])
     }
   );
+  game.lobbyMessageId = msg.message_id;
 }
 
 // Handle votes for next phase (Clue round vs Voting phase)
