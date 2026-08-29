@@ -91,7 +91,7 @@ function renderBoardText(game) {
     const clue = game.clues[player.id];
     
     if (isCurrent) {
-      text += `⚡️ *${idx + 1}. ${player.name}* ◀️ *(Active • 🕰️ ${game.turnTimeLeft}s)*\n`;
+      text += `⚡️ *${idx + 1}. ${player.name}* ◀️ *(Active • 🕰️ 60s limit)*\n`;
     } else if (clue) {
       text += `💬 *${idx + 1}. ${player.name}*: _"${clue}"_\n`;
     } else {
@@ -117,7 +117,7 @@ function renderVotingText(game) {
   return `⚡️ 🗳️ *VOTING PHASE IS ACTIVE* 🗳️ ⚡️\n` +
          `━━━━━━━━━━━━━━━━━━━━━\n\n` +
          `Click the button below to vote for the player you suspect is the Imposter!\n\n` +
-         `🕰️ *Time Remaining*: \`${game.votingTimeLeft}s\`\n` +
+         `🕰️ *Time Limit*: \`60s\`\n` +
          `─────────────────────\n` +
          `👥 *Voted Players (${totalVoted}/${game.players.length}):*\n• _${votedPlayersNames}_`;
 }
@@ -364,6 +364,20 @@ async function startNextTurn(chatId) {
   const currentSpeaker = game.speakingOrderList[game.currentSpeakerIndex];
   const mention = getMention(currentSpeaker);
 
+  // Update game board once at the start of the turn
+  await safeTelegramEditMessageText(
+    chatId,
+    game.lobbyMessageId,
+    renderBoardText(game),
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('🔑 Reveal My Word', 'reveal_word')],
+        [Markup.button.callback('❌ End Game', 'cancel_game')]
+      ])
+    }
+  );
+
   // Send clue prompt targeting current speaker
   const prompt = await bot.telegram.sendMessage(
     chatId,
@@ -378,7 +392,7 @@ async function startNextTurn(chatId) {
   );
   game.cluePromptMessageId = prompt.message_id;
 
-  // Tick timer every second
+  // Tick timer in memory without spamming the Nginx/Telegram API
   game.turnInterval = setInterval(async () => {
     game.turnTimeLeft--;
 
@@ -399,19 +413,6 @@ async function startNextTurn(chatId) {
       } else {
         await startNextTurn(chatId);
       }
-    } else {
-      await safeTelegramEditMessageText(
-        chatId,
-        game.lobbyMessageId,
-        renderBoardText(game),
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('🔑 Reveal My Word', 'reveal_word')],
-            [Markup.button.callback('❌ End Game', 'cancel_game')]
-          ])
-        }
-      );
     }
   }, 1000);
 }
@@ -492,21 +493,6 @@ async function startVotingPhase(chatId) {
       game.votingInterval = null;
       await cleanUpVoting(chatId);
       await endVoting(chatId);
-    } else {
-      const currentButtons = game.players.map(p => {
-        return [Markup.button.callback(`Vote for ${p.name}`, `vote_${p.id}`)];
-      });
-      currentButtons.push([Markup.button.callback('❌ End Game', 'cancel_game')]);
-
-      await safeTelegramEditMessageText(
-        chatId,
-        game.lobbyMessageId,
-        renderVotingText(game),
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard(currentButtons)
-        }
-      );
     }
   }, 1000);
 }
