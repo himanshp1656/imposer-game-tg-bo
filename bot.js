@@ -649,10 +649,7 @@ bot.action(/^vote_(\d+)$/, async (ctx) => {
     await safeTelegramEditMessageText(
       chatId,
       game.lobbyMessageId,
-      `🗳️ *Voting Phase is now Active!*\n\n` +
-      `Click the button of the suspect you believe is the Imposter.\n\n` +
-      `⏰ *Time remaining*: ${game.votingTimeLeft}s\n` +
-      `👥 Players who have voted (*${totalVoted}/${totalPlayers}*):\n*${votedPlayersNames || 'None'}*`,
+      renderVotingText(game),
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard(votingButtons)
