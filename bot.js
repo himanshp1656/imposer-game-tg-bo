@@ -391,6 +391,8 @@ bot.command('impostergame', async (ctx) => {
     round: 1,
     history: [],
     nextRoundVotes: [],
+    phaseVotes: { anotherRound: [], goVoting: [] },
+    cancelVotes: []
   });
 });
 
@@ -450,6 +452,47 @@ function sendStatsResponse(ctx, row) {
     `━━━━━━━━━━━━━━━━━━━━━`;
   ctx.reply(response, { parse_mode: 'Markdown' });
 }
+
+// /cancel command requiring 3 players' votes
+bot.command('cancel', async (ctx) => {
+  if (!isGroup(ctx)) {
+    return ctx.reply("❌ Please run this command in a group chat!");
+  }
+
+  const chatId = ctx.chat.id;
+  const game = games.get(chatId);
+
+  if (!game) {
+    return ctx.reply("❌ No active game session in this group.");
+  }
+
+  const userId = ctx.from.id;
+  const isPlayer = game.players.some(p => p.id === userId);
+  
+  if (!isPlayer) {
+    return ctx.reply("❌ Only players in this game can vote to cancel.");
+  }
+
+  if (!game.cancelVotes) {
+    game.cancelVotes = [];
+  }
+
+  if (game.cancelVotes.includes(userId)) {
+    return ctx.reply("ℹ️ You have already voted to cancel the game.");
+  }
+
+  game.cancelVotes.push(userId);
+  const cancelCount = game.cancelVotes.length;
+  const targetVotes = Math.min(3, game.players.length);
+
+  if (cancelCount >= targetVotes) {
+    await ctx.reply(`🛑 Cancel threshold reached (${cancelCount}/${targetVotes}). Ending the game...`);
+    await executeGameCancellation(chatId, game);
+  } else {
+    const senderName = ctx.from.first_name;
+    await ctx.reply(`⚠️ *${escapeMarkdown(senderName)}* voted to cancel the game (${cancelCount}/${targetVotes} votes recorded). Other players must type /cancel to end the game!`, { parse_mode: 'Markdown' });
+  }
+});
 
 // Join game action: checks if the player has started the bot first!
 // If not, it AUTOMATICALLY triggers a redirect to the bot's private chat.
@@ -622,11 +665,7 @@ async function startNextTurn(chatId) {
     chatId,
     `✍️ ${mention}, reply to this message directly to submit your clue!`,
     {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        force_reply: true,
-        selective: true
-      }
+      parse_mode: 'Markdown'
     }
   );
   game.cluePromptMessageId = prompt.message_id;
@@ -664,9 +703,12 @@ bot.on('message', async (ctx, next) => {
   if (!game || game.status !== 'playing') return next();
 
   const replyTo = ctx.message.reply_to_message;
-  if (replyTo && game.cluePromptMessageId && replyTo.message_id === game.cluePromptMessageId) {
-    const currentSpeaker = game.speakingOrderList[game.currentSpeakerIndex];
-    
+  const currentSpeaker = game.speakingOrderList[game.currentSpeakerIndex];
+
+  const isReply = replyTo && game.cluePromptMessageId && replyTo.message_id === game.cluePromptMessageId;
+  const isDirect = ctx.from.id === currentSpeaker.id && ctx.message.text && !ctx.message.text.startsWith('/');
+
+  if (isReply || isDirect) {
     if (ctx.from.id !== currentSpeaker.id) {
       return;
     }
@@ -988,6 +1030,29 @@ bot.action(/^vote_(\d+)$/, async (ctx) => {
 });
 
 // Callback to cancel/end the game
+async function executeGameCancellation(chatId, game) {
+  if (game.turnInterval) clearInterval(game.turnInterval);
+  if (game.votingInterval) clearInterval(game.votingInterval);
+  if (game.transitionTimeout) clearTimeout(game.transitionTimeout);
+
+  let revealMessage = "🛑 *Game Cancelled / Ended.*\n";
+  revealMessage += "━━━━━━━━━━━━━━━━━━━━━\n";
+  if (game.status !== 'lobby' && game.imposter && game.wordSetup) {
+    const wordSetup = game.wordSetup;
+    const imposterWordText = game.undercoverMode ? (wordSetup.imposterWord || 'None') : 'None (Classic Mode)';
+    revealMessage += `🕵️‍♂️ *Imposter*: *${escapeMarkdown(game.imposter.name)}* (${escapeMarkdown(game.imposter.username) || 'No username'})\n\n` +
+      `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
+      `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
+      "━━━━━━━━━━━━━━━━━━━━━";
+  }
+
+  await safeUnpinMessage(chatId, game.lobbyMessageId);
+
+  games.delete(chatId);
+  await safeTelegramEditMessageText(chatId, game.lobbyMessageId, revealMessage, { parse_mode: 'Markdown' });
+}
+
+// Callback to cancel/end the game
 bot.action('cancel_game', async (ctx) => {
   const chatId = ctx.chat.id;
   const game = games.get(chatId);
@@ -1001,26 +1066,8 @@ bot.action('cancel_game', async (ctx) => {
     return ctx.answerCbQuery("❌ Only the game creator can end/cancel the game!", { show_alert: true });
   }
 
-  if (game.turnInterval) clearInterval(game.turnInterval);
-  if (game.votingInterval) clearInterval(game.votingInterval);
-  if (game.transitionTimeout) clearTimeout(game.transitionTimeout);
-
-  let revealMessage = "🛑 *Game Cancelled / Ended.*\n";
-  revealMessage += "━━━━━━━━━━━━━━━━━━━━━\n";
-  if (game.status !== 'lobby' && game.imposter && game.wordSetup) {
-    const wordSetup = game.wordSetup;
-    const imposterWordText = game.undercoverMode ? (wordSetup.imposterWord || 'None') : 'None (Classic Mode)';
-    revealMessage += `🕵️‍♂️ *Imposter*: *${game.imposter.name}* (${game.imposter.username || 'No username'})\n\n` +
-      `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
-      `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
-      "━━━━━━━━━━━━━━━━━━━━━";
-  }
-
-  await safeUnpinMessage(chatId, game.lobbyMessageId);
-
-  games.delete(chatId);
   await ctx.answerCbQuery("🛑 Game ended.");
-  await safeTelegramEditMessageText(chatId, game.lobbyMessageId, revealMessage, { parse_mode: 'Markdown' });
+  await executeGameCancellation(chatId, game);
 });
 
 // Render transition voting board text showing all clues from all rounds
@@ -1262,6 +1309,7 @@ bot.action('start_new_match', async (ctx) => {
     game.votes = {};
     game.nextRoundVotes = [];
     game.phaseVotes = { anotherRound: [], goVoting: [] };
+    game.cancelVotes = [];
 
     const wordSetup = getRandomWord();
     const imposterIndex = Math.floor(Math.random() * totalPlayers);
