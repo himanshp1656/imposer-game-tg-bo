@@ -82,7 +82,7 @@ function getMention(player) {
 
 // Render persistent board message
 function renderBoardText(game) {
-  let text = `✨ 🎮 *IMPOSTER GAME: CLUE PHASE* 🎮 ✨\n`;
+  let text = `✨ 🎮 *IMPOSTER GAME: CLUE PHASE (ROUND ${game.round})* 🎮 ✨\n`;
   text += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
   
   text += `🗣️ *Speaking Order & Clues:*\n`;
@@ -98,6 +98,19 @@ function renderBoardText(game) {
       text += `💤 *${idx + 1}. ${player.name}*: _Waiting..._\n`;
     }
   });
+
+  // Append previous rounds' clues
+  if (game.history && game.history.length > 0) {
+    text += `\n─────────────────────\n📜 *Previous Rounds' Clues:*\n`;
+    game.history.forEach(h => {
+      text += `*Round ${h.round}* (Word: \`${h.word}\`, Imposter: *${h.imposter}*):\n`;
+      game.players.forEach(player => {
+        const clue = h.clues[player.id] || 'No clue submitted ⏰';
+        text += `• ${player.name}: _"${clue}"_\n`;
+      });
+      text += `\n`;
+    });
+  }
 
   text += `\n─────────────────────\n`;
   text += `📂 *Category*: 🕶️ _Hidden for Imposters!_\n\n`;
@@ -120,7 +133,20 @@ function renderVotingText(game) {
     cluesList += `• *${player.name}*: _"${clue}"_\n`;
   });
 
-  return `⚡️ 🗳️ *VOTING PHASE IS ACTIVE* 🗳️ ⚡️\n` +
+  // Append previous rounds' clues
+  if (game.history && game.history.length > 0) {
+    cluesList += `\n─────────────────────\n📜 *Previous Rounds' Clues:*\n`;
+    game.history.forEach(h => {
+      cluesList += `*Round ${h.round}* (Word: \`${h.word}\`, Imposter: *${h.imposter}*):\n`;
+      game.players.forEach(player => {
+        const clue = h.clues[player.id] || 'No clue submitted ⏰';
+        cluesList += `• ${player.name}: _"${clue}"_\n`;
+      });
+      cluesList += `\n`;
+    });
+  }
+
+  return `⚡️ 🗳️ *VOTING PHASE IS ACTIVE (ROUND ${game.round})* 🗳️ ⚡️\n` +
          `━━━━━━━━━━━━━━━━━━━━━\n\n` +
          `💬 *Players & Clues Submitted:*\n${cluesList}\n` +
          `─────────────────────\n` +
@@ -146,6 +172,17 @@ bot.start(async (ctx) => {
     }
 
     const userId = ctx.from.id;
+
+    // Block anonymous admins from joining
+    try {
+      const member = await ctx.telegram.getChatMember(targetChatId, userId);
+      if (member && member.is_anonymous) {
+        return ctx.reply("❌ You have 'Remain Anonymous' enabled in this group settings. Please turn it off before joining the game, or you won't be able to submit clues!");
+      }
+    } catch (err) {
+      // Ignore if bot does not have permissions to query chat member
+    }
+
     const name = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
     const username = ctx.from.username ? `@${ctx.from.username}` : '';
 
@@ -240,7 +277,10 @@ bot.command('impostergame', async (ctx) => {
     currentSpeakerIndex: 0,
     turnInterval: null,
     votingInterval: null,
-    cluePromptMessageId: null
+    cluePromptMessageId: null,
+    round: 1,
+    history: [],
+    nextRoundVotes: []
   });
 });
 
@@ -259,6 +299,17 @@ bot.action('join_game_click', async (ctx) => {
   }
 
   const userId = ctx.from.id;
+
+  // Block anonymous admins from joining
+  try {
+    const member = await ctx.telegram.getChatMember(chatId, userId);
+    if (member && member.is_anonymous) {
+      return ctx.answerCbQuery("❌ Please turn off 'Remain Anonymous' in group settings to join the game!", { show_alert: true });
+    }
+  } catch (err) {
+    // Ignore if we can't query member info
+  }
+
   const name = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
   const username = ctx.from.username ? `@${ctx.from.username}` : '';
 
@@ -550,7 +601,7 @@ async function endVoting(chatId) {
   const imposter = game.imposter;
   const wordSetup = game.wordSetup;
 
-  let resultMsg = `⚡️ 🗳️ *GAME RESULTS* 🗳️ ⚡️\n`;
+  let resultMsg = `⚡️ 🗳️ *GAME RESULTS: ROUND ${game.round}* 🗳️ ⚡️\n`;
   resultMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
   if (votesCast === 0) {
@@ -563,15 +614,53 @@ async function endVoting(chatId) {
     resultMsg += `💀 *Oops!*\nYou voted out an Innocent: *${votedOutPlayer.name}*.\n\n😈 *IMPOSTER WINS!* 🏆`;
   }
 
+  // Show clues in the final winner message
+  let currentRoundClues = '';
+  game.speakingOrderList.forEach((player) => {
+    const clue = game.clues[player.id] || 'No clue submitted ⏰';
+    currentRoundClues += `• *${player.name}*: _"${clue}"_\n`;
+  });
+
+  resultMsg += `\n\n💬 *Clues Submitted this Round:*\n${currentRoundClues}`;
+
+  // Fix the classic Imposter word bug here by checking game.undercoverMode
+  const imposterWordText = game.undercoverMode ? (wordSetup.imposterWord || 'None') : 'None (Classic Mode)';
+
   resultMsg += `\n\n─────────────────────\n` +
     `🕵️‍♂️ *Imposter*: *${imposter.name}* (${imposter.username || 'No username'})\n\n` +
     `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
-    `🤫 *Imposter Word*: \`${wordSetup.imposterWord || 'None (Classic)'}\`\n` +
-    `━━━━━━━━━━━━━━━━━━━━━`;
+    `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `🎮 *Play another round?* (Majority vote required)`;
 
-  console.log(`[GAME OVER] Chat ${chatId} ended. Imposter: ${imposter.name}, Word: ${wordSetup.word}. Votes cast: ${votesCast}`);
-  games.delete(chatId);
-  await safeTelegramEditMessageText(chatId, game.lobbyMessageId, resultMsg, { parse_mode: 'Markdown' });
+  // Save this round's clues to history
+  game.history.push({
+    round: game.round,
+    imposter: imposter.name,
+    word: wordSetup.word,
+    imposterWord: imposterWordText,
+    clues: { ...game.clues }
+  });
+
+  game.status = 'ended';
+  game.nextRoundVotes = [];
+
+  const requiredVotes = Math.ceil(totalPlayers / 2);
+
+  console.log(`[GAME OVER] Chat ${chatId} round ${game.round} ended. Imposter: ${imposter.name}, Word: ${wordSetup.word}. Votes cast: ${votesCast}`);
+  
+  await safeTelegramEditMessageText(
+    chatId,
+    game.lobbyMessageId,
+    resultMsg,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback(`🔄 Play Next Round (0/${requiredVotes})`, 'next_round_vote')],
+        [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
+      ])
+    }
+  );
 }
 
 // Callback for revealing the word
@@ -685,9 +774,10 @@ bot.action('cancel_game', async (ctx) => {
   revealMessage += "━━━━━━━━━━━━━━━━━━━━━\n";
   if (game.status !== 'lobby' && game.imposter && game.wordSetup) {
     const wordSetup = game.wordSetup;
+    const imposterWordText = game.undercoverMode ? (wordSetup.imposterWord || 'None') : 'None (Classic Mode)';
     revealMessage += `🕵️‍♂️ *Imposter*: *${game.imposter.name}* (${game.imposter.username || 'No username'})\n\n` +
       `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
-      `🤫 *Imposter Word*: \`${wordSetup.imposterWord || 'None (Classic)'}\`\n` +
+      `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
       "━━━━━━━━━━━━━━━━━━━━━";
   }
 
@@ -696,6 +786,86 @@ bot.action('cancel_game', async (ctx) => {
   games.delete(chatId);
   await ctx.answerCbQuery("🛑 Game ended.");
   await safeTelegramEditMessageText(chatId, game.lobbyMessageId, revealMessage, { parse_mode: 'Markdown' });
+});
+
+// Handle next round vote action
+bot.action('next_round_vote', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const voterId = ctx.from.id;
+  const game = games.get(chatId);
+
+  if (!game || game.status !== 'ended') {
+    return ctx.answerCbQuery("❌ No game is currently waiting for a next round.", { show_alert: true });
+  }
+
+  const isPlayer = game.players.some(p => p.id === voterId);
+  if (!isPlayer) {
+    return ctx.answerCbQuery("❌ You are not a player in this game lobby!", { show_alert: true });
+  }
+
+  if (game.nextRoundVotes.includes(voterId)) {
+    return ctx.answerCbQuery("ℹ️ You already voted for another round!");
+  }
+
+  game.nextRoundVotes.push(voterId);
+  const totalPlayers = game.players.length;
+  const requiredVotes = Math.ceil(totalPlayers / 2);
+  const currentVotes = game.nextRoundVotes.length;
+
+  await ctx.answerCbQuery("✅ Vote recorded!");
+
+  if (currentVotes >= requiredVotes) {
+    // Start Next Round!
+    game.round++;
+    game.status = 'playing';
+    game.clues = {};
+    game.votes = {};
+    game.nextRoundVotes = [];
+
+    const wordSetup = getRandomWord();
+    const imposterIndex = Math.floor(Math.random() * totalPlayers);
+    const imposter = game.players[imposterIndex];
+
+    game.imposter = imposter;
+    game.wordSetup = wordSetup;
+    game.speakingOrderList = [...game.players].sort(() => Math.random() - 0.5);
+    game.currentSpeakerIndex = 0;
+
+    // Delete old board and send a new one
+    const oldBoardId = game.lobbyMessageId;
+    await safeDeleteMessage(chatId, oldBoardId);
+
+    console.log(`[GAME START] Chat ${chatId} Round ${game.round} started. Imposter: "${imposter.name}" (ID: ${imposter.id}). Word: "${wordSetup.word}".`);
+
+    game.turnTimeLeft = 60;
+    const boardMsg = await ctx.reply(
+      renderBoardText(game),
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('🔑 Reveal My Word', 'reveal_word')],
+          [Markup.button.callback('❌ End Game', 'cancel_game')]
+        ])
+      }
+    );
+
+    game.lobbyMessageId = boardMsg.message_id;
+    await safePinMessage(chatId, boardMsg.message_id);
+
+    await startNextTurn(chatId);
+  } else {
+    // Update the button with new count
+    const votingButtons = [
+      [Markup.button.callback(`🔄 Play Next Round (${currentVotes}/${requiredVotes})`, 'next_round_vote')],
+      [Markup.button.callback('❌ Close Lobby & Exit', 'cancel_game')]
+    ];
+
+    try {
+      await ctx.editMessageReplyMarkup(Markup.inlineKeyboard(votingButtons).reply_markup);
+    } catch (err) {
+      // Ignore
+    }
+  }
 });
 
 bot.launch().then(() => {
