@@ -82,24 +82,26 @@ function getMention(player) {
 
 // Render persistent board message
 function renderBoardText(game) {
-  let text = `🎮 *Imposter Game: Clue Phase*\n\n`;
+  let text = `✨ 🎮 *IMPOSTER GAME: CLUE PHASE* 🎮 ✨\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
   
-  text += `🗣️ *Speaking Turn Order:*\n`;
+  text += `🗣️ *Speaking Order & Clues:*\n`;
   game.speakingOrderList.forEach((player, idx) => {
     const isCurrent = idx === game.currentSpeakerIndex;
     const clue = game.clues[player.id];
     
     if (isCurrent) {
-      text += `👉 *${idx + 1}. ${player.name}* (Active - 🕰️ *${game.turnTimeLeft}s*)\n`;
+      text += `⚡️ *${idx + 1}. ${player.name}* ◀️ *(Active • 🕰️ ${game.turnTimeLeft}s)*\n`;
     } else if (clue) {
-      text += `✅ *${idx + 1}. ${player.name}* - Clue: _"${clue}"_\n`;
+      text += `💬 *${idx + 1}. ${player.name}*: _"${clue}"_\n`;
     } else {
-      text += `⏳ *${idx + 1}. ${player.name}* - _Waiting_\n`;
+      text += `💤 *${idx + 1}. ${player.name}*: _Waiting..._\n`;
     }
   });
 
-  text += `\n📂 *Category*: Hidden for Imposters!\n`;
-  text += `\n👇 All players can click *🔑 Reveal My Word* to view their word privately.`;
+  text += `\n─────────────────────\n`;
+  text += `📂 *Category*: 🕶️ _Hidden for Imposters!_\n\n`;
+  text += `👇 All players must click *🔑 Reveal My Word* below to view their secret word privately!`;
   return text;
 }
 
@@ -112,10 +114,12 @@ function renderVotingText(game) {
 
   const totalVoted = Object.keys(game.votes).length;
 
-  return `🗳️ *Voting Phase is now Active!*\n\n` +
-         `Click the button of the suspect you believe is the Imposter.\n\n` +
-         `⏰ *Time remaining*: ${game.votingTimeLeft}s\n` +
-         `👥 Players who have voted (*${totalVoted}/${game.players.length}*):\n*${votedPlayersNames}*`;
+  return `⚡️ 🗳️ *VOTING PHASE IS ACTIVE* 🗳️ ⚡️\n` +
+         `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+         `Click the button below to vote for the player you suspect is the Imposter!\n\n` +
+         `🕰️ *Time Remaining*: \`${game.votingTimeLeft}s\`\n` +
+         `─────────────────────\n` +
+         `👥 *Voted Players (${totalVoted}/${game.players.length}):*\n• _${votedPlayersNames}_`;
 }
 
 // Start command - deep linking for joining
@@ -162,14 +166,16 @@ async function updateLobbyMessage(chatId) {
   const game = games.get(chatId);
   if (!game || game.status !== 'lobby' || !game.lobbyMessageId) return;
 
-  const playersList = game.players.map((p, i) => `${i + 1}. ${p.name}`).join('\n');
+  const playersList = game.players.map((p, i) => `• *${p.name}*`).join('\n') || '_No players yet_';
   await safeTelegramEditMessageText(
     chatId,
     game.lobbyMessageId,
-    `🎮 *Imposter Game Lobby*\n\n` +
-    `Click the *🙋‍♂️ Join Game* button below to join the match!\n\n` +
+    `✨ 🎮 *IMPOSTER GAME LOBBY* 🎮 ✨\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Join the lobby using the *🙋‍♂️ Join Game* button below!\n\n` +
     `👥 *Joined Players (${game.players.length}):*\n${playersList}\n\n` +
-    `⚙️ *Settings*:\n• Undercover Mode: *${game.undercoverMode ? 'ENABLED 🟢' : 'DISABLED 🔴'}*`,
+    `⚙️ *Game Settings:*\n` +
+    `• Undercover Mode: *${game.undercoverMode ? 'ON 🟢' : 'OFF 🔴'}*`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
@@ -197,10 +203,12 @@ bot.command('impostergame', async (ctx) => {
   }
 
   const initialMsg = await ctx.reply(
-    `🎮 *Imposter Game Lobby*\n\n` +
-    `Click the *🙋‍♂️ Join Game* button below to join the match!\n\n` +
-    `👥 *Joined Players (0):*\nNone yet\n\n` +
-    `⚙️ *Settings*:\n• Undercover Mode: *DISABLED 🔴*`,
+    `✨ 🎮 *IMPOSTER GAME LOBBY* 🎮 ✨\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Join the lobby using the *🙋‍♂️ Join Game* button below!\n\n` +
+    `👥 *Joined Players (0):*\n_No players yet_\n\n` +
+    `⚙️ *Game Settings:*\n` +
+    `• Undercover Mode: *OFF 🔴*`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
@@ -420,7 +428,6 @@ bot.on('message', async (ctx, next) => {
     const currentSpeaker = game.speakingOrderList[game.currentSpeakerIndex];
     
     if (ctx.from.id !== currentSpeaker.id) {
-      await safeDeleteMessage(chatId, ctx.message.message_id);
       return;
     }
 
@@ -430,7 +437,6 @@ bot.on('message', async (ctx, next) => {
     game.clues[ctx.from.id] = clueText;
 
     await safeDeleteMessage(chatId, game.cluePromptMessageId);
-    await safeDeleteMessage(chatId, ctx.message.message_id);
     game.cluePromptMessageId = null;
 
     if (game.turnInterval) {
@@ -548,21 +554,24 @@ async function endVoting(chatId) {
   const imposter = game.imposter;
   const wordSetup = game.wordSetup;
 
-  let resultMsg = `🗳️ *All votes have been cast!*\n\n`;
+  let resultMsg = `⚡️ 🗳️ *GAME RESULTS* 🗳️ ⚡️\n`;
+  resultMsg += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
   if (votesCast === 0) {
-    resultMsg += `🤷‍♂️ *No votes were cast!* Nobody made a choice.\n\n😈 *Imposter Wins!*`;
+    resultMsg += `🤷‍♂️ *No votes were cast!*\nNobody made a choice.\n\n😈 *IMPOSTER WINS!* 🏆`;
   } else if (tie) {
-    resultMsg += `⚖️ *It's a Tie!* The group couldn't agree on a single suspect.\n\n😈 *Imposter Wins!*`;
+    resultMsg += `⚖️ *It's a Tie!*\nThe group couldn't agree on a suspect.\n\n😈 *IMPOSTER WINS!* 🏆`;
   } else if (votedOutPlayer.id === imposter.id) {
-    resultMsg += `🎉 *Success!* You successfully voted out the Imposter: *${votedOutPlayer.name}*!\n\n🏆 *Innocents Win!*`;
+    resultMsg += `🎉 *Success!*\nYou successfully voted out the Imposter: *${votedOutPlayer.name}*!\n\n🏆 *INNOCENTS WIN!* 🎉`;
   } else {
-    resultMsg += `💀 *Oops!* You voted out an Innocent: *${votedOutPlayer.name}*.\n\n😈 *Imposter Wins!*`;
+    resultMsg += `💀 *Oops!*\nYou voted out an Innocent: *${votedOutPlayer.name}*.\n\n😈 *IMPOSTER WINS!* 🏆`;
   }
 
-  resultMsg += `\n\n🕵️‍♂️ *Imposter*: ${imposter.name} (${imposter.username || 'No username'})\n` +
-    `🔑 *Innocent Word*: **${wordSetup.word}**\n` +
-    `🔑 *Imposter Word*: **${wordSetup.imposterWord || 'None (Classic)'}**`;
+  resultMsg += `\n\n─────────────────────\n` +
+    `🕵️‍♂️ *Imposter*: *${imposter.name}* (${imposter.username || 'No username'})\n\n` +
+    `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
+    `🤫 *Imposter Word*: \`${wordSetup.imposterWord || 'None (Classic)'}\`\n` +
+    `━━━━━━━━━━━━━━━━━━━━━`;
 
   games.delete(chatId);
   await safeTelegramEditMessageText(chatId, game.lobbyMessageId, resultMsg, { parse_mode: 'Markdown' });
@@ -676,19 +685,21 @@ bot.action('cancel_game', async (ctx) => {
   if (game.turnInterval) clearInterval(game.turnInterval);
   if (game.votingInterval) clearInterval(game.votingInterval);
 
-  let revealMessage = "🛑 *Game Ended.*";
+  let revealMessage = "🛑 *Game Cancelled / Ended.*\n";
+  revealMessage += "━━━━━━━━━━━━━━━━━━━━━\n";
   if (game.status !== 'lobby' && game.imposter && game.wordSetup) {
     const wordSetup = game.wordSetup;
-    revealMessage += `\n\n🕵️‍♂️ *Imposter*: ${game.imposter.name} (${game.imposter.username || 'No username'})\n` +
-      `🔑 *Innocent Word*: **${wordSetup.word}**\n` +
-      `🔑 *Imposter Word*: **${wordSetup.imposterWord || 'None (Classic)'}**`;
+    revealMessage += `🕵️‍♂️ *Imposter*: *${game.imposter.name}* (${game.imposter.username || 'No username'})\n\n` +
+      `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
+      `🤫 *Imposter Word*: \`${wordSetup.imposterWord || 'None (Classic)'}\`\n` +
+      "━━━━━━━━━━━━━━━━━━━━━";
   }
 
   await safeUnpinMessage(chatId, game.lobbyMessageId);
 
   games.delete(chatId);
   await ctx.answerCbQuery("🛑 Game ended.");
-  await safeEditMessageText(ctx, revealMessage, { parse_mode: 'Markdown' });
+  await safeTelegramEditMessageText(chatId, game.lobbyMessageId, revealMessage, { parse_mode: 'Markdown' });
 });
 
 bot.launch().then(() => {
