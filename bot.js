@@ -1,9 +1,77 @@
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import http from 'http';
+import sqlite3 from 'sqlite3';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { getRandomWord } from './words.js';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const dbPath = path.join(__dirname, 'db.sqlite');
+
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('Error opening database:', err);
+  } else {
+    console.log('Connected to the SQLite database.');
+  }
+});
+
+// Initialize database table
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS stats (
+      userId INTEGER PRIMARY KEY,
+      name TEXT,
+      username TEXT,
+      imposter_wins INTEGER DEFAULT 0,
+      innocent_wins INTEGER DEFAULT 0,
+      correct_votes INTEGER DEFAULT 0
+    )
+  `);
+});
+
+// Helper to update player stats in db
+function updatePlayerStats(userId, name, username, isImposter, won, votedImposter) {
+  db.get('SELECT * FROM stats WHERE userId = ?', [userId], (err, row) => {
+    if (err) {
+      console.error('Database query error:', err);
+      return;
+    }
+
+    const impWinsAdd = (isImposter && won) ? 1 : 0;
+    const innoWinsAdd = (!isImposter && won) ? 1 : 0;
+    const correctVotesAdd = (!isImposter && votedImposter) ? 1 : 0;
+
+    if (row) {
+      db.run(
+        `UPDATE stats SET 
+          name = ?, 
+          username = ?, 
+          imposter_wins = imposter_wins + ?, 
+          innocent_wins = innocent_wins + ?, 
+          correct_votes = correct_votes + ? 
+         WHERE userId = ?`,
+        [name, username, impWinsAdd, innoWinsAdd, correctVotesAdd, userId],
+        (err) => {
+          if (err) console.error('Database update error:', err);
+        }
+      );
+    } else {
+      db.run(
+        `INSERT INTO stats (userId, name, username, imposter_wins, innocent_wins, correct_votes) 
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [userId, name, username, impWinsAdd, innoWinsAdd, correctVotesAdd],
+        (err) => {
+          if (err) console.error('Database insert error:', err);
+        }
+      );
+    }
+  });
+}
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -322,9 +390,65 @@ bot.command('impostergame', async (ctx) => {
     round: 1,
     history: [],
     nextRoundVotes: [],
-    phaseVotes: { anotherRound: [], goVoting: [] }
   });
 });
+
+// /stats command
+bot.command('stats', async (ctx) => {
+  const replyTo = ctx.message.reply_to_message;
+  let targetId = null;
+  let targetUsername = null;
+
+  const text = ctx.message.text ? ctx.message.text.trim() : '';
+  const args = text.split(/\s+/).slice(1);
+  
+  if (replyTo) {
+    targetId = replyTo.from.id;
+  } else if (args.length > 0 && args[0].startsWith('@')) {
+    targetUsername = args[0].substring(1).toLowerCase();
+  } else {
+    targetId = ctx.from.id;
+  }
+
+  if (targetId) {
+    db.get('SELECT * FROM stats WHERE userId = ?', [targetId], (err, row) => {
+      if (err) {
+        console.error('Database query error:', err);
+        return ctx.reply("❌ Error fetching stats from database.");
+      }
+      if (!row) {
+        const name = replyTo ? (replyTo.from.first_name + (replyTo.from.last_name ? ` ${replyTo.from.last_name}` : '')) : ctx.from.first_name;
+        return ctx.reply(`📊 *Stats for ${escapeMarkdown(name)}*:\nNo games played yet!`, { parse_mode: 'Markdown' });
+      }
+      sendStatsResponse(ctx, row);
+    });
+  } else if (targetUsername) {
+    db.get('SELECT * FROM stats WHERE LOWER(username) = ? OR LOWER(username) = ?', [`@${targetUsername}`, targetUsername], (err, row) => {
+      if (err) {
+        console.error('Database query error:', err);
+        return ctx.reply("❌ Error fetching stats from database.");
+      }
+      if (!row) {
+        return ctx.reply(`❌ No stats found for @${escapeMarkdown(targetUsername)}.`);
+      }
+      sendStatsResponse(ctx, row);
+    });
+  }
+});
+
+function sendStatsResponse(ctx, row) {
+  const usernameText = row.username ? ` (${escapeMarkdown(row.username)})` : '';
+  const response = `📊 *PLAYER STATS* 📊\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `👤 *Name*: *${escapeMarkdown(row.name)}*${usernameText}\n` +
+    `🆔 *ID*: \`${row.userId}\`\n` +
+    `─────────────────────\n` +
+    `😈 *Imposter Wins*: \`${row.imposter_wins}\`\n` +
+    `😇 *Innocent Wins*: \`${row.innocent_wins}\`\n` +
+    `🎯 *Correct Imposter Accusations*: \`${row.correct_votes}\`\n` +
+    `━━━━━━━━━━━━━━━━━━━━━`;
+  ctx.reply(response, { parse_mode: 'Markdown' });
+}
 
 // Join game action: checks if the player has started the bot first!
 // If not, it AUTOMATICALLY triggers a redirect to the bot's private chat.
@@ -701,6 +825,22 @@ async function endVoting(chatId) {
       }
     });
   }
+
+  // Update persistent database statistics
+  game.players.forEach(p => {
+    const isImp = p.id === imposter.id;
+    const won = isImp ? imposterWon : !imposterWon;
+    const votedImposter = game.votes[p.id] === imposter.id;
+
+    updatePlayerStats(
+      p.id,
+      p.name,
+      p.username ? p.username : '',
+      isImp,
+      won,
+      votedImposter
+    );
+  });
 
   // Show clues from all clue rounds in the final winner message
   let allCluesText = '';
