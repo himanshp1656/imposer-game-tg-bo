@@ -286,6 +286,7 @@ bot.action('join_game_click', async (ctx) => {
 
   // If started, add them directly inside the group
   game.players.push({ id: userId, name, username });
+  console.log(`[LOBBY] Player "${name}" (ID: ${userId}) joined game in chat ${chatId}`);
   await ctx.answerCbQuery("🎉 You joined the game successfully!");
 
   await updateLobbyMessage(chatId);
@@ -334,6 +335,7 @@ bot.action('start_game', async (ctx) => {
   
   game.imposter = imposter;
   game.wordSetup = wordSetup;
+  console.log(`[GAME START] Chat ${chatId} started. Imposter: "${imposter.name}" (ID: ${imposter.id}). Word: "${wordSetup.word}". Imposter Word: "${wordSetup.imposterWord || 'None'}". Undercover: ${game.undercoverMode}`);
 
   game.speakingOrderList = [...activePlayers].sort(() => Math.random() - 0.5);
   game.currentSpeakerIndex = 0;
@@ -370,6 +372,7 @@ async function startNextTurn(chatId) {
   game.turnTimeLeft = 60;
   const currentSpeaker = game.speakingOrderList[game.currentSpeakerIndex];
   const mention = getMention(currentSpeaker);
+  console.log(`[TURN START] Chat ${chatId}: It is now "${currentSpeaker.name}"'s (ID: ${currentSpeaker.id}) turn`);
 
   // Update game board once at the start of the turn
   await safeTelegramEditMessageText(
@@ -443,6 +446,7 @@ bot.on('message', async (ctx, next) => {
     if (!clueText) return;
 
     game.clues[ctx.from.id] = clueText;
+    console.log(`[CLUE SUBMIT] Chat ${chatId}: "${ctx.from.first_name}" (ID: ${ctx.from.id}) submitted clue: "${clueText}"`);
 
     game.cluePromptMessageId = null;
 
@@ -565,6 +569,7 @@ async function endVoting(chatId) {
     `🤫 *Imposter Word*: \`${wordSetup.imposterWord || 'None (Classic)'}\`\n` +
     `━━━━━━━━━━━━━━━━━━━━━`;
 
+  console.log(`[GAME OVER] Chat ${chatId} ended. Imposter: ${imposter.name}, Word: ${wordSetup.word}. Votes cast: ${votesCast}`);
   games.delete(chatId);
   await safeTelegramEditMessageText(chatId, game.lobbyMessageId, resultMsg, { parse_mode: 'Markdown' });
 }
@@ -626,6 +631,8 @@ bot.action(/^vote_(\d+)$/, async (ctx) => {
   }
 
   game.votes[voterId] = votedId;
+  const votedPlayer = game.players.find(p => p.id === votedId);
+  console.log(`[VOTE CAST] Chat ${chatId}: "${ctx.from.first_name}" (ID: ${voterId}) voted for "${votedPlayer ? votedPlayer.name : votedId}" (ID: ${votedId})`);
   await ctx.answerCbQuery("✅ Vote recorded!");
 
   const votedPlayersNames = game.players
