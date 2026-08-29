@@ -73,11 +73,16 @@ const isGroup = (ctx) => {
   return ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
 };
 
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text.replace(/[_*`[\]()]/g, '\\$&');
+}
+
 function getMention(player) {
   if (player.username) {
-    return player.username;
+    return escapeMarkdown(player.username);
   }
-  return `[${player.name}](tg://user?id=${player.id})`;
+  return `[${escapeMarkdown(player.name)}](tg://user?id=${player.id})`;
 }
 
 // Render persistent board message
@@ -91,11 +96,11 @@ function renderBoardText(game) {
     const clue = game.clues[player.id];
     
     if (isCurrent) {
-      text += `⚡️ *${idx + 1}. ${player.name}* ◀️ *(Active • 🕰️ 60s limit)*\n`;
+      text += `⚡️ *${idx + 1}. ${escapeMarkdown(player.name)}* ◀️ *(Active • 🕰️ 60s limit)*\n`;
     } else if (clue) {
-      text += `💬 *${idx + 1}. ${player.name}*: _"${clue}"_\n`;
+      text += `💬 *${idx + 1}. ${escapeMarkdown(player.name)}*: _"${escapeMarkdown(clue)}"_\n`;
     } else {
-      text += `💤 *${idx + 1}. ${player.name}*: _Waiting..._\n`;
+      text += `💤 *${idx + 1}. ${escapeMarkdown(player.name)}*: _Waiting..._\n`;
     }
   });
 
@@ -103,10 +108,10 @@ function renderBoardText(game) {
   if (game.history && game.history.length > 0) {
     text += `\n─────────────────────\n📜 *Previous Rounds' Clues:*\n`;
     game.history.forEach(h => {
-      text += `*Round ${h.round}* (Word: \`${h.word}\`, Imposter: *${h.imposter}*):\n`;
+      text += `*Round ${h.round}*:\n`;
       game.players.forEach(player => {
         const clue = h.clues[player.id] || 'No clue submitted ⏰';
-        text += `• ${player.name}: _"${clue}"_\n`;
+        text += `• ${escapeMarkdown(player.name)}: _"${escapeMarkdown(clue)}"_\n`;
       });
       text += `\n`;
     });
@@ -122,7 +127,7 @@ function renderBoardText(game) {
 function renderVotingText(game) {
   const votedPlayersNames = game.players
     .filter(p => game.votes[p.id] !== undefined)
-    .map(p => p.name)
+    .map(p => escapeMarkdown(p.name))
     .join(', ') || 'None';
 
   const totalVoted = Object.keys(game.votes).length;
@@ -130,17 +135,17 @@ function renderVotingText(game) {
   let cluesList = '';
   game.speakingOrderList.forEach((player) => {
     const clue = game.clues[player.id] || 'No clue submitted ⏰';
-    cluesList += `• *${player.name}*: _"${clue}"_\n`;
+    cluesList += `• *${escapeMarkdown(player.name)}*: _"${escapeMarkdown(clue)}"_\n`;
   });
 
   // Append previous rounds' clues
   if (game.history && game.history.length > 0) {
     cluesList += `\n─────────────────────\n📜 *Previous Rounds' Clues:*\n`;
     game.history.forEach(h => {
-      cluesList += `*Round ${h.round}* (Word: \`${h.word}\`, Imposter: *${h.imposter}*):\n`;
+      cluesList += `*Round ${h.round}*:\n`;
       game.players.forEach(player => {
         const clue = h.clues[player.id] || 'No clue submitted ⏰';
-        cluesList += `• ${player.name}: _"${clue}"_\n`;
+        cluesList += `• ${escapeMarkdown(player.name)}: _"${escapeMarkdown(clue)}"_\n`;
       });
       cluesList += `\n`;
     });
@@ -610,9 +615,9 @@ async function endVoting(chatId) {
   } else if (tie) {
     resultMsg += `⚖️ *It's a Tie!*\nThe group couldn't agree on a suspect.\n\n😈 *IMPOSTER WINS!* 🏆`;
   } else if (votedOutPlayer.id === imposter.id) {
-    resultMsg += `🎉 *Success!*\nYou successfully voted out the Imposter: *${votedOutPlayer.name}*!\n\n🏆 *INNOCENTS WIN!* 🎉`;
+    resultMsg += `🎉 *Success!*\nYou successfully voted out the Imposter: *${escapeMarkdown(votedOutPlayer.name)}*!\n\n🏆 *INNOCENTS WIN!* 🎉`;
   } else {
-    resultMsg += `💀 *Oops!*\nYou voted out an Innocent: *${votedOutPlayer.name}*.\n\n😈 *IMPOSTER WINS!* 🏆`;
+    resultMsg += `💀 *Oops!*\nYou voted out an Innocent: *${escapeMarkdown(votedOutPlayer.name)}*.\n\n😈 *IMPOSTER WINS!* 🏆`;
   }
 
   // Show clues from all clue rounds in the final winner message
@@ -621,7 +626,7 @@ async function endVoting(chatId) {
     allCluesText += `*Round ${h.round}*:\n`;
     game.players.forEach((player) => {
       const clue = h.clues[player.id] || 'No clue submitted ⏰';
-      allCluesText += `• ${player.name}: _"${clue}"_\n`;
+      allCluesText += `• ${escapeMarkdown(player.name)}: _"${escapeMarkdown(clue)}"_\n`;
     });
     allCluesText += `\n`;
   });
@@ -632,7 +637,7 @@ async function endVoting(chatId) {
   const imposterWordText = game.undercoverMode ? (wordSetup.imposterWord || 'None') : 'None (Classic Mode)';
 
   resultMsg += `\n\n─────────────────────\n` +
-    `🕵️‍♂️ *Imposter*: *${imposter.name}* (${imposter.username || 'No username'})\n\n` +
+    `🕵️‍♂️ *Imposter*: *${escapeMarkdown(imposter.name)}* (${escapeMarkdown(imposter.username) || 'No username'})\n\n` +
     `🔑 *Innocent Word*: \`${wordSetup.word}\`\n` +
     `🤫 *Imposter Word*: \`${imposterWordText}\`\n` +
     `━━━━━━━━━━━━━━━━━━━━━\n\n` +
