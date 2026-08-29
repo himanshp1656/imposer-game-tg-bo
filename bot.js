@@ -143,7 +143,10 @@ const isGroup = (ctx) => {
 
 function escapeMarkdown(text) {
   if (!text) return '';
-  return text.replace(/[_*`[\]()]/g, '\\$&');
+  return text
+    .replace(/_/g, ' ')
+    .replace(/\*/g, '')
+    .replace(/`/g, "'");
 }
 
 function getMention(player) {
