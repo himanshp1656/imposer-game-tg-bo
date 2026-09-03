@@ -190,14 +190,18 @@ const isGroup = (ctx) => {
 function escapeMarkdown(text) {
   if (!text) return '';
   return text
-    .replace(/_/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/_/g, '\\_')
     .replace(/\*/g, '')
-    .replace(/`/g, "'");
+    .replace(/`/g, "'")
+    .replace(/\[/g, '(')
+    .replace(/\]/g, ')');
 }
 
 function getMention(player) {
   if (player.username) {
-    return escapeMarkdown(player.username);
+    const raw = player.username.startsWith('@') ? player.username : `@${player.username}`;
+    return raw.replace(/_/g, '\\_');
   }
   return `[${escapeMarkdown(player.name)}](tg://user?id=${player.id})`;
 }
@@ -630,6 +634,7 @@ bot.command(['newwordgame', 'wordgame'], async (ctx) => {
     chatId,
     targetWord,
     scrambledWord,
+    clueBoard: boardText,
     startTime: Date.now(),
     guessCount: 0,
     timeoutTimer
@@ -901,7 +906,8 @@ bot.on('message', async (ctx, next) => {
 
       // Evaluate guess with Wordle-style feedback boxes
       const boxes = generateBoxes(wordGame.targetWord, cleanGuess);
-      const { boardText } = formatPuzzleBoard(cleanGuess, boxes);
+      const { boardText: guessBoard } = formatPuzzleBoard(cleanGuess, boxes);
+      const clueBoard = wordGame.clueBoard;
 
       if (cleanGuess === wordGame.targetWord) {
         if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
@@ -918,7 +924,9 @@ bot.on('message', async (ctx, next) => {
         const winMsg =
           `🎉 *CORRECT GUESS!* 🎉\n` +
           `━━━━━━━━━━━━━━━━━━━━━\n` +
-          `${boardText}\n\n` +
+          (clueBoard ? `🧩 *Original Clue*:\n${clueBoard}\n\n` : '') +
+          `🎯 *Winning Guess*:\n` +
+          `${guessBoard}\n\n` +
           `🏆 *Winner*: ${mention}\n` +
           `🔑 *Secret Word*: *${wordGame.targetWord}*\n` +
           `⏱️ *Time Taken*: *${elapsedSec}s*\n` +
@@ -933,8 +941,11 @@ bot.on('message', async (ctx, next) => {
         }
         return;
       } else {
-        // Return colored boxes for this guess
-        const feedbackMsg = `${boardText}`;
+        // Return original clue followed by the player's guess
+        const feedbackMsg =
+          (clueBoard ? `🧩 *Original Clue*:\n${clueBoard}\n\n` : '') +
+          `🎯 *Your Guess*:\n` +
+          `${guessBoard}`;
         try {
           await ctx.reply(feedbackMsg, { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
         } catch (err) {

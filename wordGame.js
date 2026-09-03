@@ -1147,14 +1147,9 @@ export function formatPuzzleBoard(scrambledWord, boxes) {
   const letterRow = " " + upper.split("").join("  ");
 
   // Monospace code block to keep columns vertically aligned
-  const grid = "```\n" + boxRow + "\n" + letterRow + "\n```";
+  const boardText = "```\n" + boxRow + "\n" + letterRow + "\n```";
 
-  // Paired inline badges (e.g. 🟩R  🟩E  🟩M  🟩O  🟨E  🟨T)
-  const badges = boxes.map((box, i) => `${box}*${upper[i]}*`).join("  ");
-
-  const boardText = `${grid}\n${badges}`;
-
-  return { boxRow, letterRow, grid, badges, boardText };
+  return { boxRow, letterRow, boardText };
 }
 
 /**
