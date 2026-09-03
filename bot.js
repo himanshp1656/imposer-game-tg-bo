@@ -575,6 +575,33 @@ bot.command('cancel', async (ctx) => {
 // /newwordgame or /wordgame command (works in Groups & DMs)
 bot.command(['newwordgame', 'wordgame'], async (ctx) => {
   const chatId = ctx.chat.id;
+  const userId = ctx.from.id;
+
+  // If in group, check if player has started DM with the bot
+  if (isGroup(ctx)) {
+    let botStarted = true;
+    try {
+      await bot.telegram.sendChatAction(userId, 'typing');
+    } catch (err) {
+      botStarted = false;
+    }
+
+    if (!botStarted) {
+      const botInfo = await bot.telegram.getMe();
+      const startUrl = `https://t.me/${botInfo.username}?start=start`;
+      return ctx.reply(
+        `⚠️ *${escapeMarkdown(ctx.from.first_name)}*, please start the bot in private chat first before launching a game!`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🤖 Start Bot in DM", url: startUrl }]
+            ]
+          }
+        }
+      );
+    }
+  }
 
   if (activeWordGames.has(chatId)) {
     return ctx.reply("⚠️ A word puzzle game is already in progress!\nType your guess in the chat or send /cancelwordgame to reveal the word.");
