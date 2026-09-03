@@ -36,10 +36,49 @@ db.serialize(() => {
       username TEXT,
       imposter_wins INTEGER DEFAULT 0,
       innocent_wins INTEGER DEFAULT 0,
-      correct_votes INTEGER DEFAULT 0
+      correct_votes INTEGER DEFAULT 0,
+      words_guessed INTEGER DEFAULT 0
     )
   `);
+
+  // Migration: add words_guessed column if it doesn't exist yet
+  db.run(`ALTER TABLE stats ADD COLUMN words_guessed INTEGER DEFAULT 0`, (err) => {
+    // Ignore error if column already exists
+  });
 });
+
+// Helper to record word game win
+function recordWordGameWin(userId, name, username) {
+  db.get('SELECT * FROM stats WHERE userId = ?', [userId], (err, row) => {
+    if (err) {
+      console.error('Database query error:', err);
+      return;
+    }
+
+    if (row) {
+      db.run(
+        `UPDATE stats SET 
+          name = ?, 
+          username = ?, 
+          words_guessed = COALESCE(words_guessed, 0) + 1 
+         WHERE userId = ?`,
+        [name, username, userId],
+        (err) => {
+          if (err) console.error('Database update error:', err);
+        }
+      );
+    } else {
+      db.run(
+        `INSERT INTO stats (userId, name, username, imposter_wins, innocent_wins, correct_votes, words_guessed) 
+         VALUES (?, ?, ?, 0, 0, 0, 1)`,
+        [userId, name, username],
+        (err) => {
+          if (err) console.error('Database insert error:', err);
+        }
+      );
+    }
+  });
+}
 
 // Helper to update player stats in db
 function updatePlayerStats(userId, name, username, isImposter, won, votedImposter) {
@@ -69,8 +108,8 @@ function updatePlayerStats(userId, name, username, isImposter, won, votedImposte
       );
     } else {
       db.run(
-        `INSERT INTO stats (userId, name, username, imposter_wins, innocent_wins, correct_votes) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stats (userId, name, username, imposter_wins, innocent_wins, correct_votes, words_guessed) 
+         VALUES (?, ?, ?, ?, ?, ?, 0)`,
         [userId, name, username, impWinsAdd, innoWinsAdd, correctVotesAdd],
         (err) => {
           if (err) console.error('Database insert error:', err);
@@ -453,17 +492,49 @@ bot.command('stats', async (ctx) => {
 
 function sendStatsResponse(ctx, row) {
   const usernameText = row.username ? ` (${escapeMarkdown(row.username)})` : '';
+  const wordsGuessed = row.words_guessed || 0;
   const response = `📊 *PLAYER STATS* 📊\n` +
     `━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `👤 *Name*: *${escapeMarkdown(row.name)}*${usernameText}\n` +
     `🆔 *ID*: \`${row.userId}\`\n` +
     `─────────────────────\n` +
-    `😈 *Imposter Wins*: \`${row.imposter_wins}\`\n` +
-    `😇 *Innocent Wins*: \`${row.innocent_wins}\`\n` +
-    `🎯 *Correct Imposter Accusations*: \`${row.correct_votes}\`\n` +
+    `🧩 *Words Correctly Guessed*: \`${wordsGuessed}\`\n` +
+    `😈 *Imposter Wins*: \`${row.imposter_wins || 0}\`\n` +
+    `😇 *Innocent Wins*: \`${row.innocent_wins || 0}\`\n` +
+    `🎯 *Correct Imposter Accusations*: \`${row.correct_votes || 0}\`\n` +
     `━━━━━━━━━━━━━━━━━━━━━`;
   ctx.reply(response, { parse_mode: 'Markdown' });
 }
+
+// /leaderboard or /top command
+bot.command(['leaderboard', 'top'], async (ctx) => {
+  db.all(
+    `SELECT name, username, words_guessed, (imposter_wins + innocent_wins) AS total_wins 
+     FROM stats 
+     WHERE words_guessed > 0 OR imposter_wins > 0 OR innocent_wins > 0
+     ORDER BY words_guessed DESC, total_wins DESC 
+     LIMIT 10`,
+    [],
+    (err, rows) => {
+      if (err) {
+        console.error('Database query error:', err);
+        return ctx.reply("❌ Error fetching leaderboard.");
+      }
+      if (!rows || rows.length === 0) {
+        return ctx.reply("📊 No player stats recorded yet!");
+      }
+
+      let text = `🏆 *WORD PUZZLE LEADERBOARD* 🏆\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      rows.forEach((r, idx) => {
+        const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx + 1}.`;
+        const userDisplay = r.username ? `@${escapeMarkdown(r.username.replace('@', ''))}` : escapeMarkdown(r.name);
+        text += `${medal} *${userDisplay}*: \`${r.words_guessed || 0}\` words guessed\n`;
+      });
+      text += `\n━━━━━━━━━━━━━━━━━━━━━\nCheck your stats with /stats`;
+      ctx.reply(text, { parse_mode: 'Markdown' });
+    }
+  );
+});
 
 // /cancel command requiring 3 votes from any users
 bot.command('cancel', async (ctx) => {
@@ -812,7 +883,11 @@ bot.on('message', async (ctx, next) => {
 
         const elapsedSec = Math.max(1, Math.round((Date.now() - wordGame.startTime) / 1000));
         const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
-        const mention = getMention({ id: ctx.from.id, name: senderName, username: ctx.from.username ? `@${ctx.from.username}` : '' });
+        const senderUsername = ctx.from.username ? `@${ctx.from.username}` : '';
+        const mention = getMention({ id: ctx.from.id, name: senderName, username: senderUsername });
+
+        // Record word game win in SQLite stats
+        recordWordGameWin(ctx.from.id, senderName, senderUsername);
 
         const winMsg =
           `🎉 *CORRECT GUESS!* 🎉\n` +
