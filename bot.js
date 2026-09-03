@@ -292,8 +292,10 @@ bot.start(async (ctx) => {
   } else {
     if (!isGroup(ctx)) {
       ctx.reply(
-        "👋 Welcome to the Imposter Game Bot!\n\n" +
-        "To play, add me to a Telegram group chat and send `/impostergame` to start a lobby!"
+        "👋 *Welcome to Imposter & Word Game Bot!*\n\n" +
+        "🧩 *Word Puzzle Game*: Play right here in DM or in groups with `/newwordgame`!\n" +
+        "🕵️‍♂️ *Imposter Game*: Add me to a group chat and send `/impostergame` to start!",
+        { parse_mode: 'Markdown' }
       );
     }
   }
@@ -499,16 +501,12 @@ bot.command('cancel', async (ctx) => {
   }
 });
 
-// /newwordgame or /wordgame command
+// /newwordgame or /wordgame command (works in Groups & DMs)
 bot.command(['newwordgame', 'wordgame'], async (ctx) => {
-  if (!isGroup(ctx)) {
-    return ctx.reply("❌ Please run this command in a group chat!");
-  }
-
   const chatId = ctx.chat.id;
 
   if (activeWordGames.has(chatId)) {
-    return ctx.reply("⚠️ A word puzzle game is already in progress in this group!\nType your guess in the chat or send /cancelwordgame to reveal the word.");
+    return ctx.reply("⚠️ A word puzzle game is already in progress!\nType your guess in the chat or send /cancelwordgame to reveal the word.");
   }
 
   const targetWord = getRandomPuzzleWord();
@@ -548,24 +546,20 @@ bot.command(['newwordgame', 'wordgame'], async (ctx) => {
     `${boxRow}\n` +
     `\`${letterRow}\`\n\n` +
     `📏 *Length*: ${targetWord.length} letters\n` +
-    `💡 Anyone can guess! Just type your guess in the chat.\n` +
+    `💡 Just type your guess in the chat.\n` +
     `━━━━━━━━━━━━━━━━━━━━━\n` +
     `Type /cancelwordgame to end game and reveal word.`;
 
   await ctx.reply(message, { parse_mode: 'Markdown' });
 });
 
-// /cancelwordgame command
+// /cancelwordgame command (works in Groups & DMs)
 bot.command('cancelwordgame', async (ctx) => {
-  if (!isGroup(ctx)) {
-    return ctx.reply("❌ Please run this command in a group chat!");
-  }
-
   const chatId = ctx.chat.id;
   const wordGame = activeWordGames.get(chatId);
 
   if (!wordGame) {
-    return ctx.reply("❌ No active word game session in this group.");
+    return ctx.reply("❌ No active word game session here.");
   }
 
   if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
@@ -782,10 +776,9 @@ async function startNextTurn(chatId) {
 
 // Listener for word game guesses and imposter clue prompts
 bot.on('message', async (ctx, next) => {
-  if (!isGroup(ctx)) return next();
   const chatId = ctx.chat.id;
 
-  // Check for active Word Game guesses
+  // Check for active Word Game guesses (works in both Groups and DMs!)
   const wordGame = activeWordGames.get(chatId);
   if (wordGame && ctx.message.text && !ctx.message.text.startsWith('/')) {
     const rawGuess = ctx.message.text.trim().toUpperCase();
@@ -813,6 +806,9 @@ bot.on('message', async (ctx, next) => {
       return;
     }
   }
+
+  // Imposter game clue prompt checking (only in groups)
+  if (!isGroup(ctx)) return next();
 
   const game = games.get(chatId);
   if (!game || game.status !== 'playing') return next();
