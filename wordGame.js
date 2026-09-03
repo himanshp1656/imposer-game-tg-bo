@@ -1144,9 +1144,17 @@ export function generateBoxes(targetWord, scrambledWord) {
 export function formatPuzzleBoard(scrambledWord, boxes) {
   const upper = scrambledWord.toUpperCase();
   const boxRow = boxes.join(" ");
-  const letterRow = upper.split("").join("  ");
+  const letterRow = " " + upper.split("").join("  ");
 
-  return { boxRow, letterRow };
+  // Monospace code block to keep columns vertically aligned
+  const grid = "```\n" + boxRow + "\n" + letterRow + "\n```";
+
+  // Paired inline badges (e.g. 🟩R  🟩E  🟩M  🟩O  🟨E  🟨T)
+  const badges = boxes.map((box, i) => `${box}*${upper[i]}*`).join("  ");
+
+  const boardText = `${grid}\n${badges}`;
+
+  return { boxRow, letterRow, grid, badges, boardText };
 }
 
 /**

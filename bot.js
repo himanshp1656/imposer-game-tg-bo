@@ -583,7 +583,7 @@ bot.command(['newwordgame', 'wordgame'], async (ctx) => {
   const targetWord = getRandomPuzzleWord();
   const scrambledWord = scrambleWord(targetWord);
   const boxes = generateBoxes(targetWord, scrambledWord);
-  const { boxRow, letterRow } = formatPuzzleBoard(scrambledWord, boxes);
+  const { boardText } = formatPuzzleBoard(scrambledWord, boxes);
 
   // Auto-expire after 10 minutes of inactivity
   const timeoutTimer = setTimeout(async () => {
@@ -614,8 +614,7 @@ bot.command(['newwordgame', 'wordgame'], async (ctx) => {
     `Unscramble the word below:\n\n` +
     `🟩 = Letter is in the *correct* position\n` +
     `🟨 = Letter is in the word, but *wrong* position\n\n` +
-    `${boxRow}\n` +
-    `\`${letterRow}\`\n\n` +
+    `${boardText}\n\n` +
     `📏 *Length*: ${targetWord.length} letters\n` +
     `💡 Just type your guess in the chat.\n` +
     `━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -875,7 +874,7 @@ bot.on('message', async (ctx, next) => {
 
       // Evaluate guess with Wordle-style feedback boxes
       const boxes = generateBoxes(wordGame.targetWord, cleanGuess);
-      const { boxRow, letterRow } = formatPuzzleBoard(cleanGuess, boxes);
+      const { boardText } = formatPuzzleBoard(cleanGuess, boxes);
 
       if (cleanGuess === wordGame.targetWord) {
         if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
@@ -892,8 +891,7 @@ bot.on('message', async (ctx, next) => {
         const winMsg =
           `🎉 *CORRECT GUESS!* 🎉\n` +
           `━━━━━━━━━━━━━━━━━━━━━\n` +
-          `${boxRow}\n` +
-          `\`${letterRow}\`\n\n` +
+          `${boardText}\n\n` +
           `🏆 *Winner*: ${mention}\n` +
           `🔑 *Secret Word*: *${wordGame.targetWord}*\n` +
           `⏱️ *Time Taken*: *${elapsedSec}s*\n` +
@@ -909,7 +907,7 @@ bot.on('message', async (ctx, next) => {
         return;
       } else {
         // Return colored boxes for this guess
-        const feedbackMsg = `${boxRow}\n\`${letterRow}\``;
+        const feedbackMsg = `${boardText}`;
         try {
           await ctx.reply(feedbackMsg, { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
         } catch (err) {
