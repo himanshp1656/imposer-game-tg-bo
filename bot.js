@@ -5,6 +5,13 @@ import sqlite3 from 'sqlite3';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { getRandomWord } from './words.js';
+import {
+  activeWordGames,
+  getRandomPuzzleWord,
+  scrambleWord,
+  generateBoxes,
+  formatPuzzleBoard
+} from './wordGame.js';
 
 dotenv.config();
 
@@ -456,7 +463,7 @@ function sendStatsResponse(ctx, row) {
   ctx.reply(response, { parse_mode: 'Markdown' });
 }
 
-// /cancel command requiring 3 players' votes
+// /cancel command requiring 3 votes from any users
 bot.command('cancel', async (ctx) => {
   if (!isGroup(ctx)) {
     return ctx.reply("❌ Please run this command in a group chat!");
@@ -470,11 +477,6 @@ bot.command('cancel', async (ctx) => {
   }
 
   const userId = ctx.from.id;
-  const isPlayer = game.players.some(p => p.id === userId);
-  
-  if (!isPlayer) {
-    return ctx.reply("❌ Only players in this game can vote to cancel.");
-  }
 
   if (!game.cancelVotes) {
     game.cancelVotes = [];
@@ -486,15 +488,95 @@ bot.command('cancel', async (ctx) => {
 
   game.cancelVotes.push(userId);
   const cancelCount = game.cancelVotes.length;
-  const targetVotes = Math.min(3, game.players.length);
+  const targetVotes = 3;
 
   if (cancelCount >= targetVotes) {
     await ctx.reply(`🛑 Cancel threshold reached (${cancelCount}/${targetVotes}). Ending the game...`);
     await executeGameCancellation(chatId, game);
   } else {
     const senderName = ctx.from.first_name;
-    await ctx.reply(`⚠️ *${escapeMarkdown(senderName)}* voted to cancel the game (${cancelCount}/${targetVotes} votes recorded). Other players must type /cancel to end the game!`, { parse_mode: 'Markdown' });
+    await ctx.reply(`⚠️ *${escapeMarkdown(senderName)}* voted to cancel the game (${cancelCount}/${targetVotes} votes recorded). Anyone in the group can type /cancel to end the game!`, { parse_mode: 'Markdown' });
   }
+});
+
+// /newwordgame or /wordgame command
+bot.command(['newwordgame', 'wordgame'], async (ctx) => {
+  if (!isGroup(ctx)) {
+    return ctx.reply("❌ Please run this command in a group chat!");
+  }
+
+  const chatId = ctx.chat.id;
+
+  if (activeWordGames.has(chatId)) {
+    return ctx.reply("⚠️ A word puzzle game is already in progress in this group!\nType your guess in the chat or send /cancelwordgame to reveal the word.");
+  }
+
+  const targetWord = getRandomPuzzleWord();
+  const scrambledWord = scrambleWord(targetWord);
+  const boxes = generateBoxes(targetWord, scrambledWord);
+  const { boxRow, letterRow } = formatPuzzleBoard(scrambledWord, boxes);
+
+  // Auto-expire after 10 minutes of inactivity
+  const timeoutTimer = setTimeout(async () => {
+    const ongoing = activeWordGames.get(chatId);
+    if (ongoing && ongoing.targetWord === targetWord) {
+      activeWordGames.delete(chatId);
+      await ctx.reply(
+        `⏰ *Time's up!* Nobody guessed the secret word.\n\n` +
+        `🔑 The secret word was: *${targetWord}*\n\n` +
+        `Start a new game anytime with /newwordgame!`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+  }, 10 * 60 * 1000);
+
+  activeWordGames.set(chatId, {
+    chatId,
+    targetWord,
+    scrambledWord,
+    startTime: Date.now(),
+    guessCount: 0,
+    timeoutTimer
+  });
+
+  const message =
+    `🧩 *WORD PUZZLE GAME STARTED!* 🧩\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n` +
+    `Unscramble the word below:\n\n` +
+    `🟩 = Letter is in the *correct* position\n` +
+    `🟨 = Letter is in the word, but *wrong* position\n\n` +
+    `${boxRow}\n` +
+    `\`${letterRow}\`\n\n` +
+    `📏 *Length*: ${targetWord.length} letters\n` +
+    `💡 Anyone can guess! Just type your guess in the chat.\n` +
+    `━━━━━━━━━━━━━━━━━━━━━\n` +
+    `Type /cancelwordgame to end game and reveal word.`;
+
+  await ctx.reply(message, { parse_mode: 'Markdown' });
+});
+
+// /cancelwordgame command
+bot.command('cancelwordgame', async (ctx) => {
+  if (!isGroup(ctx)) {
+    return ctx.reply("❌ Please run this command in a group chat!");
+  }
+
+  const chatId = ctx.chat.id;
+  const wordGame = activeWordGames.get(chatId);
+
+  if (!wordGame) {
+    return ctx.reply("❌ No active word game session in this group.");
+  }
+
+  if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
+  activeWordGames.delete(chatId);
+
+  await ctx.reply(
+    `🛑 *Word game cancelled!*\n\n` +
+    `🔑 The secret word was: *${wordGame.targetWord}*\n\n` +
+    `Start a new game anytime with /newwordgame!`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // Join game action: checks if the player has started the bot first!
@@ -698,10 +780,40 @@ async function startNextTurn(chatId) {
   }, 1000);
 }
 
-// Listener for replies to clue prompt
+// Listener for word game guesses and imposter clue prompts
 bot.on('message', async (ctx, next) => {
   if (!isGroup(ctx)) return next();
   const chatId = ctx.chat.id;
+
+  // Check for active Word Game guesses
+  const wordGame = activeWordGames.get(chatId);
+  if (wordGame && ctx.message.text && !ctx.message.text.startsWith('/')) {
+    const rawGuess = ctx.message.text.trim().toUpperCase();
+    wordGame.guessCount = (wordGame.guessCount || 0) + 1;
+
+    if (rawGuess === wordGame.targetWord) {
+      if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
+      activeWordGames.delete(chatId);
+
+      const elapsedSec = Math.max(1, Math.round((Date.now() - wordGame.startTime) / 1000));
+      const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+      const mention = getMention({ id: ctx.from.id, name: senderName, username: ctx.from.username ? `@${ctx.from.username}` : '' });
+
+      await ctx.reply(
+        `🎉 *CORRECT GUESS!* 🎉\n` +
+        `━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🏆 *Winner*: ${mention}\n` +
+        `🔑 *Secret Word*: *${wordGame.targetWord}*\n` +
+        `⏱️ *Time Taken*: *${elapsedSec}s*\n` +
+        `🎯 *Total Guesses*: *${wordGame.guessCount}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━\n` +
+        `Want to play again? Type /newwordgame`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+  }
+
   const game = games.get(chatId);
   if (!game || game.status !== 'playing') return next();
 
