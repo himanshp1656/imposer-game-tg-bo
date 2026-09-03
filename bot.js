@@ -781,29 +781,67 @@ bot.on('message', async (ctx, next) => {
   // Check for active Word Game guesses (works in both Groups and DMs!)
   const wordGame = activeWordGames.get(chatId);
   if (wordGame && ctx.message.text && !ctx.message.text.startsWith('/')) {
-    const rawGuess = ctx.message.text.trim().toUpperCase();
-    wordGame.guessCount = (wordGame.guessCount || 0) + 1;
+    const rawText = ctx.message.text.trim();
+    const cleanGuess = rawText.replace(/[^a-zA-Z]/g, '').toUpperCase();
+    const targetLen = wordGame.targetWord.length;
 
-    if (rawGuess === wordGame.targetWord) {
-      if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
-      activeWordGames.delete(chatId);
+    if (cleanGuess.length > 0) {
+      const inGroup = isGroup(ctx);
 
-      const elapsedSec = Math.max(1, Math.round((Date.now() - wordGame.startTime) / 1000));
-      const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
-      const mention = getMention({ id: ctx.from.id, name: senderName, username: ctx.from.username ? `@${ctx.from.username}` : '' });
+      // In DM, inform the user if their guess has the wrong length
+      // In group, ignore non-matching lengths to avoid interrupting regular conversation
+      if (cleanGuess.length !== targetLen) {
+        if (!inGroup) {
+          await ctx.reply(
+            `⚠️ The secret word has *${targetLen}* letters! Your guess has *${cleanGuess.length}*.\nTry again!`,
+            { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id }
+          );
+        }
+        return;
+      }
 
-      await ctx.reply(
-        `🎉 *CORRECT GUESS!* 🎉\n` +
-        `━━━━━━━━━━━━━━━━━━━━━\n` +
-        `🏆 *Winner*: ${mention}\n` +
-        `🔑 *Secret Word*: *${wordGame.targetWord}*\n` +
-        `⏱️ *Time Taken*: *${elapsedSec}s*\n` +
-        `🎯 *Total Guesses*: *${wordGame.guessCount}*\n` +
-        `━━━━━━━━━━━━━━━━━━━━━\n` +
-        `Want to play again? Type /newwordgame`,
-        { parse_mode: 'Markdown' }
-      );
-      return;
+      wordGame.guessCount = (wordGame.guessCount || 0) + 1;
+
+      // Evaluate guess with Wordle-style feedback boxes
+      const boxes = generateBoxes(wordGame.targetWord, cleanGuess);
+      const { boxRow, letterRow } = formatPuzzleBoard(cleanGuess, boxes);
+
+      if (cleanGuess === wordGame.targetWord) {
+        if (wordGame.timeoutTimer) clearTimeout(wordGame.timeoutTimer);
+        activeWordGames.delete(chatId);
+
+        const elapsedSec = Math.max(1, Math.round((Date.now() - wordGame.startTime) / 1000));
+        const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+        const mention = getMention({ id: ctx.from.id, name: senderName, username: ctx.from.username ? `@${ctx.from.username}` : '' });
+
+        const winMsg =
+          `🎉 *CORRECT GUESS!* 🎉\n` +
+          `━━━━━━━━━━━━━━━━━━━━━\n` +
+          `${boxRow}\n` +
+          `\`${letterRow}\`\n\n` +
+          `🏆 *Winner*: ${mention}\n` +
+          `🔑 *Secret Word*: *${wordGame.targetWord}*\n` +
+          `⏱️ *Time Taken*: *${elapsedSec}s*\n` +
+          `🎯 *Total Guesses*: *${wordGame.guessCount}*\n` +
+          `━━━━━━━━━━━━━━━━━━━━━\n` +
+          `Want to play again? Type /newwordgame`;
+
+        try {
+          await ctx.reply(winMsg, { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
+        } catch (err) {
+          await ctx.reply(winMsg, { parse_mode: 'Markdown' });
+        }
+        return;
+      } else {
+        // Return colored boxes for this guess
+        const feedbackMsg = `${boxRow}\n\`${letterRow}\``;
+        try {
+          await ctx.reply(feedbackMsg, { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
+        } catch (err) {
+          await ctx.reply(feedbackMsg, { parse_mode: 'Markdown' });
+        }
+        return;
+      }
     }
   }
 

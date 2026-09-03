@@ -1355,3 +1355,5 @@ export function getRandomPuzzleWord() {
   const index = Math.floor(Math.random() * famousWords.length);
   return famousWords[index].toUpperCase();
 }
+
+export const evaluateGuess = generateBoxes;
